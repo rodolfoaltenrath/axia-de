@@ -1,0 +1,17 @@
+.zig-cache/
+zig-out/
+
+.DS_Store
+Thumbs.db
+
+.env
+.env.*
+.direnv/
+
+.vscode/
+.idea/
+
+*.log
+*.swp
+*.swo
+*~

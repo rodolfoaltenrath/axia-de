@@ -1,0 +1,28 @@
+pub const c = @cImport({
+    @cDefine("WLR_USE_UNSTABLE", "");
+    @cInclude("time.h");
+    @cInclude("wayland-server-core.h");
+    @cInclude("xkbcommon/xkbcommon.h");
+    @cInclude("pixman.h");
+    @cInclude("wlr/backend.h");
+    @cInclude("wlr/backend/wayland.h");
+    @cInclude("wlr/render/pass.h");
+    @cInclude("wlr/render/wlr_renderer.h");
+    @cInclude("wlr/render/allocator.h");
+    @cInclude("wlr/types/wlr_compositor.h");
+    @cInclude("wlr/types/wlr_cursor.h");
+    @cInclude("wlr/types/wlr_data_device.h");
+    @cInclude("wlr/types/wlr_xcursor_manager.h");
+    @cInclude("wlr/types/wlr_output.h");
+    @cInclude("wlr/types/wlr_output_layout.h");
+    @cInclude("wlr/types/wlr_scene.h");
+    @cInclude("wlr/types/wlr_seat.h");
+    @cInclude("wlr/types/wlr_input_device.h");
+    @cInclude("wlr/types/wlr_keyboard.h");
+    @cInclude("wlr/types/wlr_layer_shell_v1.h");
+    @cInclude("wlr/types/wlr_pointer.h");
+    @cInclude("wlr/types/wlr_subcompositor.h");
+    @cInclude("wlr/types/wlr_xdg_decoration_v1.h");
+    @cInclude("wlr/types/wlr_xdg_shell.h");
+    @cInclude("wlr/util/log.h");
+});
