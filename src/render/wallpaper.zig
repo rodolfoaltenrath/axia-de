@@ -63,7 +63,10 @@ pub const WallpaperAsset = struct {
     }
 
     fn loadFromOwnedPath(allocator: std.mem.Allocator, owned_path: []u8) !*WallpaperAsset {
-        const image = try ImageBuffer.loadPng(allocator, owned_path);
+        const prepared = try prepareLoadPath(allocator, owned_path);
+        defer allocator.free(prepared.load_path);
+
+        const image = try ImageBuffer.loadPng(allocator, prepared.load_path);
         errdefer c.wlr_buffer_drop(&image.base);
 
         const asset = try allocator.create(WallpaperAsset);
@@ -77,6 +80,81 @@ pub const WallpaperAsset = struct {
         return asset;
     }
 };
+
+const PreparedPath = struct {
+    load_path: []u8,
+};
+
+fn prepareLoadPath(allocator: std.mem.Allocator, path: []const u8) !PreparedPath {
+    if (endsWithIgnoreCase(path, ".png")) {
+        return .{ .load_path = try allocator.dupe(u8, path) };
+    }
+
+    if (!isConvertibleImage(path)) {
+        return error.UnsupportedWallpaperFormat;
+    }
+
+    const cache_path = try cacheConvertedPath(allocator);
+    errdefer allocator.free(cache_path);
+
+    var child = std.process.Child.init(&.{
+        "magick",
+        path,
+        "-auto-orient",
+        cache_path,
+    }, allocator);
+    child.stdin_behavior = .Ignore;
+    child.stdout_behavior = .Ignore;
+    child.stderr_behavior = .Ignore;
+    try child.spawn();
+    const term = try child.wait();
+    switch (term) {
+        .Exited => |code| {
+            if (code != 0) return error.WallpaperConversionFailed;
+        },
+        else => return error.WallpaperConversionFailed,
+    }
+
+    return .{ .load_path = cache_path };
+}
+
+fn cacheConvertedPath(allocator: std.mem.Allocator) ![]u8 {
+    const cache_home = try cacheHome(allocator);
+    defer allocator.free(cache_home);
+
+    const dir = try std.fs.path.join(allocator, &.{ cache_home, "axia-de" });
+    defer allocator.free(dir);
+    try std.fs.cwd().makePath(dir);
+
+    return try std.fs.path.join(allocator, &.{ dir, "converted-wallpaper.png" });
+}
+
+fn cacheHome(allocator: std.mem.Allocator) ![]u8 {
+    const from_env = std.process.getEnvVarOwned(allocator, "XDG_CACHE_HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    if (from_env) |value| {
+        if (value.len > 0) return value;
+        allocator.free(value);
+    }
+
+    const home = try std.process.getEnvVarOwned(allocator, "HOME");
+    defer allocator.free(home);
+    return try std.fs.path.join(allocator, &.{ home, ".cache" });
+}
+
+fn isConvertibleImage(path: []const u8) bool {
+    return endsWithIgnoreCase(path, ".jpg") or
+        endsWithIgnoreCase(path, ".jpeg") or
+        endsWithIgnoreCase(path, ".webp") or
+        endsWithIgnoreCase(path, ".bmp");
+}
+
+fn endsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    return std.ascii.eqlIgnoreCase(haystack[haystack.len - needle.len ..], needle);
+}
 
 const ImageBuffer = struct {
     allocator: std.mem.Allocator,

@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("../wl.zig").c;
 const CairoBuffer = @import("../render/cairo_buffer.zig").CairoBuffer;
+const files = @import("files.zig");
 const model = @import("model.zig");
 const render = @import("render.zig");
 
@@ -25,6 +26,7 @@ pub const SettingsManager = struct {
     page: model.Page = .wallpapers,
     hovered_index: ?usize = null,
     current_wallpaper_path: ?[]u8 = null,
+    browser: files.Browser,
     apply_ctx: ?*anyopaque = null,
     apply_wallpaper_cb: ?ApplyWallpaperCallback = null,
 
@@ -37,6 +39,7 @@ pub const SettingsManager = struct {
             .allocator = allocator,
             .output_layout = output_layout,
             .overlay_root = overlay_root,
+            .browser = files.Browser.init(allocator),
         };
     }
 
@@ -62,6 +65,9 @@ pub const SettingsManager = struct {
 
     pub fn open(self: *SettingsManager, page: model.Page) !void {
         try self.ensureNodes();
+        if (page == .wallpapers) {
+            try self.browser.ensureDefaultDirectory();
+        }
         self.page = page;
         self.hovered_index = null;
         self.visible = true;
@@ -90,6 +96,7 @@ pub const SettingsManager = struct {
     pub fn deinit(self: *SettingsManager) void {
         self.close();
         if (self.current_wallpaper_path) |path| self.allocator.free(path);
+        self.browser.deinit();
     }
 
     pub fn handlePointerMotion(self: *SettingsManager, lx: f64, ly: f64) bool {
@@ -141,6 +148,64 @@ pub const SettingsManager = struct {
 
         switch (self.page) {
             .wallpapers => {
+                if (render.browserHomeRect().contains(local_x, local_y)) {
+                    self.browser.openHome() catch |err| {
+                        log.err("failed to open home directory: {}", .{err});
+                    };
+                    try self.redraw();
+                    return true;
+                }
+                if (render.browserPicturesRect().contains(local_x, local_y)) {
+                    self.browser.openPictures() catch |err| {
+                        log.err("failed to open pictures directory: {}", .{err});
+                    };
+                    try self.redraw();
+                    return true;
+                }
+                if (render.browserDownloadsRect().contains(local_x, local_y)) {
+                    self.browser.openDownloads() catch |err| {
+                        log.err("failed to open downloads directory: {}", .{err});
+                    };
+                    try self.redraw();
+                    return true;
+                }
+                if (render.browserUpRect().contains(local_x, local_y)) {
+                    self.browser.goParent() catch |err| {
+                        log.err("failed to open parent directory: {}", .{err});
+                    };
+                    try self.redraw();
+                    return true;
+                }
+                if (render.browserPrevRect().contains(local_x, local_y)) {
+                    self.browser.previousPage();
+                    try self.redraw();
+                    return true;
+                }
+                if (render.browserNextRect().contains(local_x, local_y)) {
+                    self.browser.nextPage();
+                    try self.redraw();
+                    return true;
+                }
+                if (render.browserEntryHitTest(local_x, local_y, self.browser.snapshot().count)) |entry_index| {
+                    const entry = self.browser.visibleEntry(entry_index) orelse return true;
+                    switch (entry.kind) {
+                        .directory => {
+                            self.browser.openDirectory(entry.path) catch |err| {
+                                log.err("failed to open directory: {}", .{err});
+                                return true;
+                            };
+                            self.redraw() catch |err| {
+                                log.err("failed to redraw settings: {}", .{err});
+                            };
+                        },
+                        .image => {
+                            if (self.apply_wallpaper_cb) |callback| {
+                                callback(self.apply_ctx, entry.path);
+                            }
+                        },
+                    }
+                    return true;
+                }
                 const index = render.wallpaperHitTest(local_x, local_y) orelse return true;
                 const preset = model.wallpaper_presets[index];
                 if (self.apply_wallpaper_cb) |callback| {
@@ -180,6 +245,7 @@ pub const SettingsManager = struct {
             .page = self.page,
             .hovered_index = self.hovered_index,
             .current_wallpaper_path = self.current_wallpaper_path,
+            .browser = self.browser.snapshot(),
         });
         c.cairo_surface_flush(buffer.surface);
         if (self.scene_buffer) |scene_buffer| {

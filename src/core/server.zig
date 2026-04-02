@@ -15,6 +15,7 @@ const DesktopMenu = @import("../desktop/menu.zig").DesktopMenu;
 const DesktopAction = @import("../desktop/actions.zig").Action;
 const SettingsManager = @import("../settings/manager.zig").SettingsManager;
 const SettingsPage = @import("../settings/model.zig").Page;
+const Preferences = @import("../config/preferences.zig");
 
 const log = std.log.scoped(.axia);
 
@@ -110,7 +111,18 @@ pub const Server = struct {
         var ipc = IpcServer.init(allocator);
         errdefer ipc.deinit();
 
-        const wallpaper = try WallpaperAsset.loadDefault(allocator);
+        var preferences = try Preferences.load(allocator);
+        defer preferences.deinit();
+
+        const wallpaper = blk: {
+            if (preferences.wallpaper_path) |path| {
+                break :blk WallpaperAsset.loadFromPath(allocator, path) catch |err| {
+                    log.err("failed to load configured wallpaper, falling back: {}", .{err});
+                    break :blk try WallpaperAsset.loadDefault(allocator);
+                };
+            }
+            break :blk try WallpaperAsset.loadDefault(allocator);
+        };
         errdefer if (wallpaper) |asset| asset.deinit();
 
         const desktop_menu = DesktopMenu.init(
@@ -391,6 +403,7 @@ pub const Server = struct {
         const old_wallpaper = self.wallpaper;
         self.wallpaper = new_wallpaper;
         try self.settings.setCurrentWallpaperPath(new_wallpaper.source_path);
+        try Preferences.saveWallpaper(self.allocator, path);
         if (old_wallpaper) |wallpaper| wallpaper.deinit();
         log.info("wallpaper applied: {s}", .{path});
     }
