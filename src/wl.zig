@@ -1,5 +1,7 @@
 pub const c = @cImport({
     @cDefine("WLR_USE_UNSTABLE", "");
+    @cInclude("cairo/cairo.h");
+    @cInclude("drm_fourcc.h");
     @cInclude("time.h");
     @cInclude("wayland-server-core.h");
     @cInclude("xkbcommon/xkbcommon.h");
@@ -20,9 +22,11 @@ pub const c = @cImport({
     @cInclude("wlr/types/wlr_input_device.h");
     @cInclude("wlr/types/wlr_keyboard.h");
     @cInclude("wlr/types/wlr_layer_shell_v1.h");
+    @cInclude("wlr/types/wlr_buffer.h");
     @cInclude("wlr/types/wlr_pointer.h");
     @cInclude("wlr/types/wlr_subcompositor.h");
     @cInclude("wlr/types/wlr_xdg_decoration_v1.h");
     @cInclude("wlr/types/wlr_xdg_shell.h");
+    @cInclude("wlr/interfaces/wlr_buffer.h");
     @cInclude("wlr/util/log.h");
 });

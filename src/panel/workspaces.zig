@@ -47,8 +47,8 @@ pub fn drawPopup(cr: *c.cairo_t, width: u32, height: u32, state: IpcWorkspaceSta
     c.cairo_set_line_width(cr, 1);
     c.cairo_stroke(cr);
 
-    drawLabel(cr, 18, 28, 18, "Areas de Trabalho", 0.96, 0.96, 0.97);
-    drawLabel(cr, 18, 44, 12, "Clique para trocar. Botao do meio move a janela focada.", 0.72, 0.72, 0.75);
+    drawLabel(cr, 18, 28, 18, "Áreas de Trabalho", 0.96, 0.96, 0.97);
+    drawLabel(cr, 18, 44, 12, "Clique para trocar. Botão do meio move a janela focada.", 0.72, 0.72, 0.75);
 
     for (0..state.count) |index| {
         drawWorkspaceCard(cr, itemRect(index), index, state.current, state.summaries[index]);

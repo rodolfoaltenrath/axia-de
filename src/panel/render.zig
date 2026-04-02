@@ -60,7 +60,7 @@ pub fn drawPanel(
     c.cairo_rectangle(cr, 0, @as(f64, @floatFromInt(height - 1)), @floatFromInt(width), 1);
     c.cairo_fill(cr);
 
-    drawLabel(cr, metrics.workspaces.x + 12, 26, 17, "Areas de Trabalho", 0.93, 0.93, 0.95);
+    drawLabel(cr, metrics.workspaces.x + 12, 26, 17, "Áreas de Trabalho", 0.93, 0.93, 0.95);
     drawLabel(cr, metrics.apps.x + 12, 26, 17, "Aplicativos", 0.93, 0.93, 0.95);
 
     drawRoundedRect(cr, metrics.clock, 12);
@@ -131,7 +131,7 @@ pub fn drawCalendarPopup(
     c.cairo_set_source_rgba(cr, 1, 1, 1, 0.10);
     c.cairo_rectangle(cr, 20, @as(f64, @floatFromInt(height)) - 54, @as(f64, @floatFromInt(width - 40)), 1);
     c.cairo_fill(cr);
-    drawLabel(cr, 22, @as(f64, @floatFromInt(height)) - 22, 16, "Configuracoes de data, hora e calendario...", 0.82, 0.82, 0.84);
+    drawLabel(cr, 22, @as(f64, @floatFromInt(height)) - 22, 16, "Configurações de data, hora e calendário...", 0.82, 0.82, 0.84);
 }
 
 fn drawArrowButton(cr: *c.cairo_t, rect: Rect, label: []const u8) void {

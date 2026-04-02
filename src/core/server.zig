@@ -10,6 +10,11 @@ const XdgManager = @import("../shell/xdg.zig").XdgManager;
 const DecorationManager = @import("../shell/decoration.zig").DecorationManager;
 const IpcServer = @import("../ipc/server.zig").IpcServer;
 const IpcWorkspaceSnapshot = @import("../ipc/server.zig").WorkspaceSnapshot;
+const WallpaperAsset = @import("../render/wallpaper.zig").WallpaperAsset;
+const DesktopMenu = @import("../desktop/menu.zig").DesktopMenu;
+const DesktopAction = @import("../desktop/actions.zig").Action;
+const SettingsManager = @import("../settings/manager.zig").SettingsManager;
+const SettingsPage = @import("../settings/model.zig").Page;
 
 const log = std.log.scoped(.axia);
 
@@ -33,6 +38,9 @@ pub const Server = struct {
     xdg: XdgManager,
     decorations: DecorationManager,
     ipc: IpcServer,
+    wallpaper: ?*WallpaperAsset,
+    desktop_menu: DesktopMenu,
+    settings: SettingsManager,
 
     pub fn init(allocator: std.mem.Allocator) !Server {
         c.wlr_log_init(c.WLR_ERROR, null);
@@ -102,6 +110,26 @@ pub const Server = struct {
         var ipc = IpcServer.init(allocator);
         errdefer ipc.deinit();
 
+        const wallpaper = try WallpaperAsset.loadDefault(allocator);
+        errdefer if (wallpaper) |asset| asset.deinit();
+
+        const desktop_menu = DesktopMenu.init(
+            allocator,
+            output_layout,
+            scene.overlayLayerRoot(),
+        );
+
+        var settings = SettingsManager.init(
+            allocator,
+            output_layout,
+            scene.overlayLayerRoot(),
+        );
+        errdefer settings.deinit();
+
+        if (wallpaper) |asset| {
+            try settings.setCurrentWallpaperPath(asset.source_path);
+        }
+
         log.info("Wayland socket ready at {s}", .{std.mem.span(socket_name)});
 
         return .{
@@ -121,6 +149,9 @@ pub const Server = struct {
             .xdg = xdg,
             .decorations = decorations,
             .ipc = ipc,
+            .wallpaper = wallpaper,
+            .desktop_menu = desktop_menu,
+            .settings = settings,
         };
     }
 
@@ -136,6 +167,8 @@ pub const Server = struct {
         self.xdg.setupListeners();
         self.decorations.setupListeners();
         self.ipc.setWorkspaceCallbacks(self, ipcGetWorkspaceState, ipcActivateWorkspace, ipcMoveFocusedWorkspace);
+        self.desktop_menu.setActionCallback(self, handleDesktopAction);
+        self.settings.setApplyWallpaperCallback(self, handleApplyWallpaper);
     }
 
     pub fn deinit(self: *Server) void {
@@ -157,6 +190,9 @@ pub const Server = struct {
         self.layers.deinit();
         self.panel.deinit();
         self.input.deinit();
+        if (self.wallpaper) |wallpaper| wallpaper.deinit();
+        self.desktop_menu.deinit();
+        self.settings.deinit();
 
         self.scene.deinit();
         _ = self.protocols;
@@ -189,6 +225,7 @@ pub const Server = struct {
             self.scene.scene,
             self.scene.output_layout_link,
             self.scene.backgroundRoot(),
+            self.wallpaper,
             wlr_output,
             self,
             unregisterOutputCallback,
@@ -203,6 +240,12 @@ pub const Server = struct {
         }
         if (self.layers.primary_output == null) {
             self.layers.setPrimaryOutput(wlr_output);
+        }
+        if (self.desktop_menu.primary_output == null) {
+            self.desktop_menu.setPrimaryOutput(wlr_output);
+        }
+        if (self.settings.primary_output == null) {
+            self.settings.setPrimaryOutput(wlr_output);
         }
         self.xdg.setUsableArea(self.layers.getUsableArea());
     }
@@ -236,6 +279,8 @@ pub const Server = struct {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
         if (server.layers.handlePointerMotion(time_msec, lx, ly)) return;
+        if (server.settings.handlePointerMotion(lx, ly)) return;
+        if (server.desktop_menu.handlePointerMotion(lx, ly)) return;
         server.xdg.handlePointerMotion(time_msec, lx, ly);
     }
 
@@ -250,6 +295,15 @@ pub const Server = struct {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
         if (server.layers.handlePointerButton(time_msec, button, state, lx, ly)) return;
+        if (server.settings.handlePointerButton(button, state, lx, ly)) return;
+        if (server.desktop_menu.handlePointerButton(button, state, lx, ly)) return;
+        if (!server.xdg.hasHitAt(lx, ly) and state == c.WL_POINTER_BUTTON_STATE_PRESSED and button == 0x111) {
+            server.xdg.clearDesktopFocus();
+            server.desktop_menu.showAt(lx, ly) catch |err| {
+                log.err("failed to show desktop menu: {}", .{err});
+            };
+            return;
+        }
         server.xdg.handlePointerButton(time_msec, button, state, lx, ly, server.input.currentModifiers());
     }
 
@@ -300,5 +354,44 @@ pub const Server = struct {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
         server.xdg.moveFocusedViewToWorkspace(workspace_index);
+    }
+
+    fn handleDesktopAction(ctx: ?*anyopaque, action: DesktopAction) void {
+        const raw_server = ctx orelse return;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        const page: SettingsPage = switch (action) {
+            .wallpapers => .wallpapers,
+            .appearance => .appearance,
+            .panel => .panel,
+            .displays => .displays,
+            .workspaces => .workspaces,
+            .about => .about,
+        };
+        server.settings.open(page) catch |err| {
+            log.err("failed to open settings page: {}", .{err});
+        };
+    }
+
+    fn handleApplyWallpaper(ctx: ?*anyopaque, path: []const u8) void {
+        const raw_server = ctx orelse return;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        server.applyWallpaper(path) catch |err| {
+            log.err("failed to apply wallpaper: {}", .{err});
+        };
+    }
+
+    fn applyWallpaper(self: *Server, path: []const u8) !void {
+        const new_wallpaper = try WallpaperAsset.loadFromPath(self.allocator, path);
+        errdefer new_wallpaper.deinit();
+
+        for (self.outputs.items) |output| {
+            try output.setWallpaper(new_wallpaper);
+        }
+
+        const old_wallpaper = self.wallpaper;
+        self.wallpaper = new_wallpaper;
+        try self.settings.setCurrentWallpaperPath(new_wallpaper.source_path);
+        if (old_wallpaper) |wallpaper| wallpaper.deinit();
+        log.info("wallpaper applied: {s}", .{path});
     }
 };

@@ -95,6 +95,14 @@ Panel:
 - `Aplicativos`: app launcher popup
 - clock: calendar popup
 
+Wallpaper:
+- default asset: `assets/wallpapers/axia-aurora.png`
+- override per run:
+
+```bash
+AXIA_WALLPAPER=/caminho/para/seu-wallpaper.png zig build run
+```
+
 ## Notes
 
 - The panel is a separate Wayland client spawned by the compositor.

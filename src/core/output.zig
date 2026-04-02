@@ -1,5 +1,7 @@
 const std = @import("std");
 const c = @import("../wl.zig").c;
+const BackgroundNodes = @import("../render/background.zig").BackgroundNodes;
+const WallpaperAsset = @import("../render/wallpaper.zig").WallpaperAsset;
 
 const log = std.log.scoped(.axia_output);
 
@@ -14,9 +16,10 @@ pub const Output = struct {
     scene: [*c]c.struct_wlr_scene,
     scene_output_layout: ?*c.struct_wlr_scene_output_layout,
     background_parent: [*c]c.struct_wlr_scene_tree,
+    wallpaper_asset: ?*WallpaperAsset,
     wlr_output: [*c]c.struct_wlr_output,
     scene_output: ?[*c]c.struct_wlr_scene_output = null,
-    background_rect: ?[*c]c.struct_wlr_scene_rect = null,
+    background: ?BackgroundNodes = null,
     destroy_ctx: ?*anyopaque,
     destroy_cb: DestroyCallback,
     destroy: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
@@ -31,6 +34,7 @@ pub const Output = struct {
         scene: [*c]c.struct_wlr_scene,
         scene_output_layout: ?*c.struct_wlr_scene_output_layout,
         background_parent: [*c]c.struct_wlr_scene_tree,
+        wallpaper_asset: ?*WallpaperAsset,
         wlr_output: [*c]c.struct_wlr_output,
         destroy_ctx: ?*anyopaque,
         destroy_cb: DestroyCallback,
@@ -45,6 +49,7 @@ pub const Output = struct {
             .scene = scene,
             .scene_output_layout = scene_output_layout,
             .background_parent = background_parent,
+            .wallpaper_asset = wallpaper_asset,
             .wlr_output = wlr_output,
             .destroy_ctx = destroy_ctx,
             .destroy_cb = destroy_cb,
@@ -85,9 +90,9 @@ pub const Output = struct {
     }
 
     pub fn detach(self: *Output) void {
-        if (self.background_rect) |background_rect| {
-            c.wlr_scene_node_destroy(&background_rect.*.node);
-            self.background_rect = null;
+        if (self.background) |*background| {
+            background.destroy();
+            self.background = null;
         }
         if (self.scene_output) |scene_output| {
             c.wlr_scene_output_destroy(scene_output);
@@ -96,6 +101,22 @@ pub const Output = struct {
         c.wlr_output_layout_remove(self.output_layout, self.wlr_output);
         c.wl_list_remove(&self.frame.link);
         c.wl_list_remove(&self.destroy.link);
+    }
+
+    pub fn setWallpaper(self: *Output, wallpaper_asset: ?*WallpaperAsset) !void {
+        self.wallpaper_asset = wallpaper_asset;
+        if (self.background) |*background| {
+            background.destroy();
+            self.background = null;
+        }
+
+        try self.ensureBackground();
+
+        if (self.scene_output) |scene_output| {
+            if (!c.wlr_scene_output_commit(scene_output, null)) {
+                return error.SceneOutputCommitFailed;
+            }
+        }
     }
 
     fn configure(self: *Output) !void {
@@ -149,23 +170,11 @@ pub const Output = struct {
         var box = std.mem.zeroes(c.struct_wlr_box);
         c.wlr_output_layout_get_box(self.output_layout, self.wlr_output, &box);
 
-        if (self.background_rect == null) {
-            const color = [4]f32{ 0.04, 0.05, 0.06, 1.0 };
-            const background_rect = c.wlr_scene_rect_create(
-                self.background_parent,
-                box.width,
-                box.height,
-                &color,
-            ) orelse return error.BackgroundRectCreateFailed;
-
-            c.wlr_scene_node_set_position(&background_rect.*.node, box.x, box.y);
-            self.background_rect = background_rect;
-            return;
+        if (self.background == null) {
+            self.background = try BackgroundNodes.create(self.background_parent, self.wallpaper_asset);
         }
 
-        const background_rect = self.background_rect.?;
-        c.wlr_scene_rect_set_size(background_rect, box.width, box.height);
-        c.wlr_scene_node_set_position(&background_rect.*.node, box.x, box.y);
+        self.background.?.update(box);
     }
 
     fn destroyNotify(listener: [*c]c.struct_wl_listener, _: ?*anyopaque) callconv(.c) void {

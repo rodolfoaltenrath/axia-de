@@ -66,7 +66,9 @@ pub fn build(b: *std.Build) void {
     exe.step.dependOn(&gen_layer_shell.step);
 
     exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    exe.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
     exe.addIncludePath(.{ .cwd_relative = "/usr/include/pixman-1" });
+    exe.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
     exe.addIncludePath(.{ .cwd_relative = wlroots_include });
     exe.addIncludePath(xdg_shell_header.dirname());
     exe.addIncludePath(layer_shell_header.dirname());
@@ -75,6 +77,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("wayland-server");
     exe.linkSystemLibrary("xkbcommon");
     exe.linkSystemLibrary("pixman-1");
+    exe.linkSystemLibrary("cairo");
 
     b.installArtifact(exe);
 

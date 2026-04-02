@@ -196,6 +196,15 @@ pub const XdgManager = struct {
         c.wlr_seat_pointer_notify_clear_focus(self.seat);
     }
 
+    pub fn hasHitAt(self: *XdgManager, lx: f64, ly: f64) bool {
+        return self.hitTest(lx, ly) != null;
+    }
+
+    pub fn clearDesktopFocus(self: *XdgManager) void {
+        c.wlr_seat_pointer_notify_clear_focus(self.seat);
+        self.clearFocus();
+    }
+
     pub fn handlePointerButton(self: *XdgManager, time_msec: u32, button: u32, state: c.enum_wl_pointer_button_state, lx: f64, ly: f64, modifiers: u32) void {
         self.cursor_lx = lx;
         self.cursor_ly = ly;
