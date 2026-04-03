@@ -394,14 +394,9 @@ pub const View = struct {
             c.wlr_output_layout_get_box(self.output_layout, self.primary_output, &area);
         }
 
-        const width = self.effectiveWidth();
-        const height = self.effectiveHeight();
-        const max_x = area.x + @max(area.width - width, 0);
-        const max_y = area.y + @max(area.height - height, 0);
-
         return .{
-            .x = std.math.clamp(x, area.x, max_x),
-            .y = std.math.clamp(y, area.y, max_y),
+            .x = x,
+            .y = @max(y, area.y),
         };
     }
 

@@ -470,7 +470,9 @@ pub const App = struct {
             return;
         }
         if (metrics.apps.contains(x, y)) {
-            self.toggleLauncherPopup();
+            self.spawnCommand("exec \"$AXIA_BIN_DIR/axia-launcher\"") catch |err| {
+                log.err("failed to launch Axia Launcher: {}", .{err});
+            };
             return;
         }
         if (metrics.workspaces.contains(x, y)) {

@@ -56,6 +56,10 @@ pub const PanelProcess = struct {
             log.err("failed to set WAYLAND_DISPLAY for panel: {}", .{err});
             return;
         };
+        env_map.put("AXIA_BIN_DIR", exe_dir) catch |err| {
+            log.err("failed to set AXIA_BIN_DIR for panel: {}", .{err});
+            return;
+        };
         env_map.put("AXIA_IPC_SOCKET", ipc_socket_path) catch |err| {
             log.err("failed to set AXIA_IPC_SOCKET for panel: {}", .{err});
             return;

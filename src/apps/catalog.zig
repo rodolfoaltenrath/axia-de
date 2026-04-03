@@ -20,7 +20,7 @@ pub const entries = [_]AppEntry{
     },
     .{
         .label = "Arquivos",
-        .command = "command -v cosmic-files >/dev/null 2>&1 && exec cosmic-files || exec xdg-open \"$HOME\"",
+        .command = "exec \"$AXIA_BIN_DIR/axia-files\"",
         .monogram = "A",
         .accent = .{ 0.29, 0.66, 0.94 },
     },

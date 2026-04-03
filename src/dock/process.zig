@@ -56,6 +56,10 @@ pub const DockProcess = struct {
             log.err("failed to set WAYLAND_DISPLAY for dock: {}", .{err});
             return;
         };
+        env_map.put("AXIA_BIN_DIR", exe_dir) catch |err| {
+            log.err("failed to set AXIA_BIN_DIR for dock: {}", .{err});
+            return;
+        };
 
         var child = std.process.Child.init(argv, self.allocator);
         child.stdin_behavior = .Ignore;

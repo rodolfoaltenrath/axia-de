@@ -57,6 +57,22 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const client_wl_module = b.createModule(.{
+        .root_source_file = b.path("src/client/wl.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    client_wl_module.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    client_wl_module.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
+    client_wl_module.addIncludePath(.{ .cwd_relative = "/usr/include/pixman-1" });
+    client_wl_module.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    client_wl_module.addIncludePath(xdg_shell_client_header.dirname());
+    const client_buffer_module = b.createModule(.{
+        .root_source_file = b.path("src/client/buffer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    client_buffer_module.addImport("client_wl", client_wl_module);
 
     const exe = b.addExecutable(.{
         .name = "axia-de",
@@ -142,6 +158,53 @@ pub fn build(b: *std.Build) void {
     dock_exe.linkSystemLibrary("cairo");
 
     b.installArtifact(dock_exe);
+
+    const launcher_app_exe = b.addExecutable(.{
+        .name = "axia-launcher",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/apps/launcher/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    launcher_app_exe.linkLibC();
+    launcher_app_exe.root_module.addImport("apps_catalog", apps_catalog_module);
+    launcher_app_exe.root_module.addImport("client_wl", client_wl_module);
+    launcher_app_exe.root_module.addImport("client_buffer", client_buffer_module);
+    launcher_app_exe.step.dependOn(&gen_xdg_shell_client_header.step);
+    launcher_app_exe.step.dependOn(&gen_xdg_shell_client_code.step);
+    launcher_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    launcher_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
+    launcher_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/pixman-1" });
+    launcher_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    launcher_app_exe.addIncludePath(xdg_shell_client_header.dirname());
+    launcher_app_exe.addCSourceFile(.{ .file = xdg_shell_client_code });
+    launcher_app_exe.linkSystemLibrary("wayland-client");
+    launcher_app_exe.linkSystemLibrary("cairo");
+    b.installArtifact(launcher_app_exe);
+
+    const files_app_exe = b.addExecutable(.{
+        .name = "axia-files",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/apps/files/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    files_app_exe.linkLibC();
+    files_app_exe.root_module.addImport("client_wl", client_wl_module);
+    files_app_exe.root_module.addImport("client_buffer", client_buffer_module);
+    files_app_exe.step.dependOn(&gen_xdg_shell_client_header.step);
+    files_app_exe.step.dependOn(&gen_xdg_shell_client_code.step);
+    files_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    files_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
+    files_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/pixman-1" });
+    files_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    files_app_exe.addIncludePath(xdg_shell_client_header.dirname());
+    files_app_exe.addCSourceFile(.{ .file = xdg_shell_client_code });
+    files_app_exe.linkSystemLibrary("wayland-client");
+    files_app_exe.linkSystemLibrary("cairo");
+    b.installArtifact(files_app_exe);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
