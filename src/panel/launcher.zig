@@ -1,20 +1,12 @@
 const c = @import("wl.zig").c;
+const catalog = @import("apps_catalog");
 const Rect = @import("render.zig").Rect;
 
 pub const popup_width: u32 = 280;
 pub const popup_height: u32 = 182;
 const row_height: f64 = 44;
 
-pub const AppEntry = struct {
-    label: []const u8,
-    command: []const u8,
-};
-
-pub const entries = [_]AppEntry{
-    .{ .label = "Terminal", .command = "command -v cosmic-terminal >/dev/null 2>&1 && exec cosmic-terminal || exec alacritty" },
-    .{ .label = "Firefox", .command = "firefox" },
-    .{ .label = "Arquivos", .command = "command -v cosmic-files >/dev/null 2>&1 && exec cosmic-files || exec xdg-open \"$HOME\"" },
-};
+pub const entries = catalog.entries;
 
 pub fn itemRect(index: usize) Rect {
     return .{

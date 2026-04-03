@@ -52,6 +52,12 @@ pub fn build(b: *std.Build) void {
     });
     const layer_shell_client_code = gen_layer_shell_client_code.addOutputFileArg("wlr-layer-shell-unstable-v1-protocol.c");
 
+    const apps_catalog_module = b.createModule(.{
+        .root_source_file = b.path("src/apps/catalog.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const exe = b.addExecutable(.{
         .name = "axia-de",
         .root_module = b.createModule(.{
@@ -91,6 +97,7 @@ pub fn build(b: *std.Build) void {
     });
 
     panel_exe.linkLibC();
+    panel_exe.root_module.addImport("apps_catalog", apps_catalog_module);
     panel_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     panel_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     panel_exe.step.dependOn(&gen_layer_shell_client_header.step);
@@ -107,6 +114,34 @@ pub fn build(b: *std.Build) void {
     panel_exe.linkSystemLibrary("cairo");
 
     b.installArtifact(panel_exe);
+
+    const dock_exe = b.addExecutable(.{
+        .name = "axia-dock",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dock/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    dock_exe.linkLibC();
+    dock_exe.root_module.addImport("apps_catalog", apps_catalog_module);
+    dock_exe.step.dependOn(&gen_xdg_shell_client_header.step);
+    dock_exe.step.dependOn(&gen_xdg_shell_client_code.step);
+    dock_exe.step.dependOn(&gen_layer_shell_client_header.step);
+    dock_exe.step.dependOn(&gen_layer_shell_client_code.step);
+    dock_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    dock_exe.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
+    dock_exe.addIncludePath(.{ .cwd_relative = "/usr/include/pixman-1" });
+    dock_exe.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    dock_exe.addIncludePath(xdg_shell_client_header.dirname());
+    dock_exe.addIncludePath(layer_shell_client_header.dirname());
+    dock_exe.addCSourceFile(.{ .file = xdg_shell_client_code });
+    dock_exe.addCSourceFile(.{ .file = layer_shell_client_code });
+    dock_exe.linkSystemLibrary("wayland-client");
+    dock_exe.linkSystemLibrary("cairo");
+
+    b.installArtifact(dock_exe);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
@@ -125,4 +160,13 @@ pub fn build(b: *std.Build) void {
 
     const run_panel_step = b.step("run-panel", "Run Axia panel client");
     run_panel_step.dependOn(&run_panel_cmd.step);
+
+    const run_dock_cmd = b.addRunArtifact(dock_exe);
+    run_dock_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_dock_cmd.addArgs(args);
+    }
+
+    const run_dock_step = b.step("run-dock", "Run Axia dock client");
+    run_dock_step.dependOn(&run_dock_cmd.step);
 }

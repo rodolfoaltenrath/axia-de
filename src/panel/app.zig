@@ -8,6 +8,7 @@ const render = @import("render.zig");
 const workspaces = @import("workspaces.zig");
 
 const log = std.log.scoped(.axia_panel);
+const default_output_width: u32 = 1366;
 
 const SurfaceRole = enum {
     panel,
@@ -70,6 +71,7 @@ pub const App = struct {
     pointer_x: f64 = 0,
     pointer_y: f64 = 0,
     pointer_role: ?SurfaceRole = null,
+    panel_hovered: render.HoverTarget = .none,
     panel: SurfaceState = .{ .role = .panel },
     popup: SurfaceState = .{ .role = .clock_popup },
     launcher_popup: SurfaceState = .{ .role = .launcher_popup },
@@ -376,7 +378,7 @@ pub const App = struct {
 
         const buffer = &surface.buffer.?;
         switch (surface.role) {
-            .panel => render.drawPanel(buffer.cr, surface.width, surface.height, self.now),
+            .panel => render.drawPanel(buffer.cr, surface.width, surface.height, self.now, self.panel_hovered),
             .clock_popup => render.drawCalendarPopup(buffer.cr, surface.width, surface.height, self.month_cursor, self.now),
             .launcher_popup => launcher.drawPopup(buffer.cr, surface.width, surface.height),
             .workspace_popup => workspaces.drawPopup(buffer.cr, surface.width, surface.height, self.workspace_state),
@@ -550,6 +552,18 @@ pub const App = struct {
         self.workspace_state = ipc.getWorkspaceState(self.allocator, socket_path) catch self.workspace_state;
     }
 
+    fn updatePanelHover(self: *App) void {
+        const new_hovered = if (self.pointer_role == .panel)
+            render.panelHoverAt(self.panel.width, panel_height, self.pointer_x, self.pointer_y)
+        else
+            render.HoverTarget.none;
+
+        if (new_hovered != self.panel_hovered) {
+            self.panel_hovered = new_hovered;
+            self.panel.dirty = true;
+        }
+    }
+
     fn activateWorkspace(self: *App, index: usize) void {
         const socket_path = self.ipc_socket_path orelse return;
         self.workspace_state = ipc.activateWorkspace(self.allocator, socket_path, index) catch self.workspace_state;
@@ -617,7 +631,7 @@ pub const App = struct {
 
         c.zwlr_layer_surface_v1_ack_configure(zwlr_surface, serial);
         surface.width = if (width == 0) switch (surface.role) {
-            .panel => 1280,
+            .panel => default_output_width,
             .clock_popup => popup_width,
             .launcher_popup => launcher.popup_width,
             .workspace_popup => workspaces.popup_width,
@@ -675,18 +689,21 @@ pub const App = struct {
         } else {
             app.pointer_role = null;
         }
+        app.updatePanelHover();
     }
 
     fn handlePointerLeave(data: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: ?*c.struct_wl_surface) callconv(.c) void {
         const raw_app = data orelse return;
         const app: *App = @ptrCast(@alignCast(raw_app));
         app.pointer_role = null;
+        app.updatePanelHover();
     }
     fn handlePointerMotion(data: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, surface_x: c.wl_fixed_t, surface_y: c.wl_fixed_t) callconv(.c) void {
         const raw_app = data orelse return;
         const app: *App = @ptrCast(@alignCast(raw_app));
         app.pointer_x = c.wl_fixed_to_double(surface_x);
         app.pointer_y = c.wl_fixed_to_double(surface_y);
+        app.updatePanelHover();
     }
 
     fn handlePointerButton(data: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: u32, button: u32, state: u32) callconv(.c) void {

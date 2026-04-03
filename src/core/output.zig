@@ -4,6 +4,8 @@ const BackgroundNodes = @import("../render/background.zig").BackgroundNodes;
 const WallpaperAsset = @import("../render/wallpaper.zig").WallpaperAsset;
 
 const log = std.log.scoped(.axia_output);
+const nested_width = 1366;
+const nested_height = 680;
 
 pub const DestroyCallback = *const fn (?*anyopaque, *Output) void;
 
@@ -136,8 +138,8 @@ pub const Output = struct {
         } else if (c.wlr_output_is_wl(self.wlr_output)) {
             c.wlr_output_state_set_custom_mode(
                 &state,
-                self.wlr_output.*.width,
-                self.wlr_output.*.height,
+                nested_width,
+                nested_height,
                 0,
             );
         }

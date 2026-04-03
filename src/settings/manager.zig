@@ -259,7 +259,7 @@ pub const SettingsManager = struct {
             c.wlr_output_layout_get_box(self.output_layout, output, &box);
         }
         if (box.width <= 0 or box.height <= 0) {
-            box = .{ .x = 0, .y = 0, .width = 1280, .height = 720 };
+            box = .{ .x = 0, .y = 0, .width = 1366, .height = 680 };
         }
         return .{
             .x = box.x + @divTrunc(box.width - width, 2),

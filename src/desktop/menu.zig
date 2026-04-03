@@ -204,7 +204,7 @@ pub const DesktopMenu = struct {
         }
 
         if (box.width <= 0 or box.height <= 0) {
-            box = .{ .x = 0, .y = 0, .width = 1280, .height = 720 };
+            box = .{ .x = 0, .y = 0, .width = 1366, .height = 680 };
         }
 
         const clamped_x = std.math.clamp(x, box.x + 8, box.x + box.width - width - 8);

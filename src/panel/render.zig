@@ -24,13 +24,20 @@ pub const PopupMetrics = struct {
     next_month: Rect,
 };
 
+pub const HoverTarget = enum {
+    none,
+    workspaces,
+    apps,
+    clock,
+};
+
 pub fn computePanelMetrics(width: u32, height: u32) PanelMetrics {
     const h = @as(f64, @floatFromInt(height));
     const center_x = @as(f64, @floatFromInt(width)) / 2.0;
 
     return .{
-        .workspaces = .{ .x = 18, .y = 6, .width = 160, .height = h - 12 },
-        .apps = .{ .x = 184, .y = 6, .width = 120, .height = h - 12 },
+        .workspaces = .{ .x = 18, .y = 4, .width = 160, .height = h - 8 },
+        .apps = .{ .x = 184, .y = 4, .width = 120, .height = h - 8 },
         .clock = .{ .x = center_x - 94, .y = 4, .width = 188, .height = h - 8 },
     };
 }
@@ -42,34 +49,46 @@ pub fn popupMetrics(width: u32, _: u32) PopupMetrics {
     };
 }
 
+pub fn panelHoverAt(width: u32, height: u32, x: f64, y: f64) HoverTarget {
+    const metrics = computePanelMetrics(width, height);
+    if (metrics.clock.contains(x, y)) return .clock;
+    if (metrics.apps.contains(x, y)) return .apps;
+    if (metrics.workspaces.contains(x, y)) return .workspaces;
+    return .none;
+}
+
 pub fn drawPanel(
     cr: *c.cairo_t,
     width: u32,
     height: u32,
     now: calendar.DateTime,
+    hovered: HoverTarget,
 ) void {
     const metrics = computePanelMetrics(width, height);
+    const bar_rect = Rect{
+        .x = 0,
+        .y = 0,
+        .width = @floatFromInt(width),
+        .height = @floatFromInt(height),
+    };
 
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
 
-    c.cairo_set_source_rgb(cr, 0.10, 0.10, 0.11);
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+    c.cairo_set_source_rgba(cr, 0, 0, 0, 0);
     c.cairo_paint(cr);
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
 
-    c.cairo_set_source_rgba(cr, 0.93, 0.93, 0.95, 0.06);
-    c.cairo_rectangle(cr, 0, @as(f64, @floatFromInt(height - 1)), @floatFromInt(width), 1);
-    c.cairo_fill(cr);
+    drawGlassBar(cr, bar_rect);
+    drawPanelLabel(cr, metrics.workspaces, "Áreas de Trabalho", hovered == .workspaces);
+    drawPanelLabel(cr, metrics.apps, "Aplicativos", hovered == .apps);
 
-    drawLabel(cr, metrics.workspaces.x + 12, 26, 17, "Áreas de Trabalho", 0.93, 0.93, 0.95);
-    drawLabel(cr, metrics.apps.x + 12, 26, 17, "Aplicativos", 0.93, 0.93, 0.95);
-
-    drawRoundedRect(cr, metrics.clock, 12);
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.05);
-    c.cairo_fill(cr);
+    drawClockHover(cr, metrics.clock, hovered == .clock);
 
     var label_buf: [64]u8 = undefined;
     const label = calendar.shortTimestamp(&label_buf, now);
-    drawCenteredLabel(cr, metrics.clock, 16, label, 0.94, 0.94, 0.96);
+    drawCenteredLabel(cr, metrics.clock, 16, label, 0.97, 0.98, 0.99);
 }
 
 pub fn drawCalendarPopup(
@@ -139,6 +158,85 @@ fn drawArrowButton(cr: *c.cairo_t, rect: Rect, label: []const u8) void {
     c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
     c.cairo_fill(cr);
     drawCenteredLabel(cr, rect, 18, label, 0.95, 0.95, 0.97);
+}
+
+fn drawGlassBar(cr: *c.cairo_t, rect: Rect) void {
+    c.cairo_rectangle(cr, rect.x, rect.y, rect.width, rect.height);
+    c.cairo_set_source_rgba(cr, 0.092, 0.098, 0.122, 0.74);
+    c.cairo_fill(cr);
+
+    c.cairo_rectangle(cr, rect.x, rect.y, rect.width, 1);
+    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.16);
+    c.cairo_fill(cr);
+
+    c.cairo_rectangle(cr, rect.x, rect.y + rect.height - 1, rect.width, 1);
+    c.cairo_set_source_rgba(cr, 0.53, 0.84, 0.98, 0.38);
+    c.cairo_fill(cr);
+
+    c.cairo_rectangle(cr, rect.x, rect.y, rect.width, rect.height);
+    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.018);
+    c.cairo_fill(cr);
+}
+
+fn drawPanelLabel(cr: *c.cairo_t, rect: Rect, label: []const u8, hovered: bool) void {
+    const text_x = rect.x + 12;
+    const text_y = rect.y + rect.height / 2.0 + 6;
+
+    if (hovered) {
+        var text_buf: [256]u8 = undefined;
+        const c_text = toCString(&text_buf, label);
+        var extents: c.cairo_text_extents_t = undefined;
+        c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_NORMAL);
+        c.cairo_set_font_size(cr, 15);
+        c.cairo_text_extents(cr, c_text.ptr, &extents);
+
+        const hover_rect = Rect{
+            .x = text_x - 10,
+            .y = rect.y,
+            .width = extents.width + 24,
+            .height = rect.height,
+        };
+        drawHoverCapsule(cr, hover_rect);
+    }
+
+    drawLabel(
+        cr,
+        text_x,
+        text_y,
+        15,
+        label,
+        if (hovered) 0.985 else 0.95,
+        if (hovered) 0.99 else 0.96,
+        if (hovered) 0.995 else 0.97,
+    );
+}
+
+fn drawClockHover(cr: *c.cairo_t, rect: Rect, hovered: bool) void {
+    if (!hovered) return;
+    drawHoverCapsule(cr, rect);
+}
+
+fn drawHoverCapsule(cr: *c.cairo_t, rect: Rect) void {
+    drawRoundedRect(cr, rect, 9);
+    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.075);
+    c.cairo_fill_preserve(cr);
+
+    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.05);
+    c.cairo_set_line_width(cr, 1);
+    c.cairo_stroke(cr);
+
+    drawRoundedRect(
+        cr,
+        .{
+            .x = rect.x + 1,
+            .y = rect.y + 1,
+            .width = rect.width - 2,
+            .height = rect.height * 0.48,
+        },
+        8,
+    );
+    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.032);
+    c.cairo_fill(cr);
 }
 
 fn drawRoundedRect(cr: *c.cairo_t, rect: Rect, radius: f64) void {

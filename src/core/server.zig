@@ -6,6 +6,7 @@ const SceneManager = @import("../render/scene.zig").SceneManager;
 const InputManager = @import("../input/manager.zig").InputManager;
 const LayerManager = @import("../layers/manager.zig").LayerManager;
 const PanelProcess = @import("../panel/process.zig").PanelProcess;
+const DockProcess = @import("../dock/process.zig").DockProcess;
 const XdgManager = @import("../shell/xdg.zig").XdgManager;
 const DecorationManager = @import("../shell/decoration.zig").DecorationManager;
 const IpcServer = @import("../ipc/server.zig").IpcServer;
@@ -36,6 +37,7 @@ pub const Server = struct {
     input: InputManager,
     layers: LayerManager,
     panel: PanelProcess,
+    dock: DockProcess,
     xdg: XdgManager,
     decorations: DecorationManager,
     ipc: IpcServer,
@@ -95,6 +97,7 @@ pub const Server = struct {
         errdefer layers.deinit();
 
         const panel = PanelProcess.init(allocator);
+        const dock = DockProcess.init(allocator);
 
         var xdg = try XdgManager.init(
             allocator,
@@ -158,6 +161,7 @@ pub const Server = struct {
             .input = input,
             .layers = layers,
             .panel = panel,
+            .dock = dock,
             .xdg = xdg,
             .decorations = decorations,
             .ipc = ipc,
@@ -201,6 +205,7 @@ pub const Server = struct {
         self.ipc.deinit();
         self.layers.deinit();
         self.panel.deinit();
+        self.dock.deinit();
         self.input.deinit();
         if (self.wallpaper) |wallpaper| wallpaper.deinit();
         self.desktop_menu.deinit();
@@ -223,6 +228,7 @@ pub const Server = struct {
         }
 
         self.panel.spawn(self.socket_name, self.ipc.path());
+        self.dock.spawn(self.socket_name);
         log.info("Axia-DE core is running on WAYLAND_DISPLAY={s}", .{std.mem.span(self.socket_name)});
         c.wl_display_run(self.display);
     }
