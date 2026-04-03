@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("client_wl").c;
 const buffer_mod = @import("client_buffer");
 const browser = @import("browser.zig");
+const icons = @import("icons.zig");
 const render = @import("render.zig");
 
 const log = std.log.scoped(.axia_files);
@@ -32,7 +33,9 @@ pub const App = struct {
     hovered: render.Hit = .none,
     last_button_serial: u32 = 0,
     maximized: bool = false,
+    sidebar_collapsed: bool = false,
     browser: browser.Browser,
+    icons: icons.SidebarIcons,
     registry_listener: c.struct_wl_registry_listener = undefined,
     wm_base_listener: c.struct_xdg_wm_base_listener = undefined,
     xdg_surface_listener: c.struct_xdg_surface_listener = undefined,
@@ -53,6 +56,7 @@ pub const App = struct {
             .display = display,
             .registry = registry,
             .browser = browser.Browser.init(allocator),
+            .icons = try icons.SidebarIcons.init(allocator),
         };
 
         app.registry_listener = .{ .global = handleGlobal, .global_remove = handleGlobalRemove };
@@ -84,6 +88,7 @@ pub const App = struct {
         if (self.wm_base) |wm_base| c.xdg_wm_base_destroy(wm_base);
         if (self.shm) |shm| c.wl_shm_destroy(shm);
         if (self.compositor) |compositor| c.wl_compositor_destroy(compositor);
+        self.icons.deinit();
         self.browser.deinit();
         c.wl_registry_destroy(self.registry);
         c.wl_display_disconnect(self.display);
@@ -139,7 +144,15 @@ pub const App = struct {
         self.buffer = try buffer_mod.ShmBuffer.init(shm, self.current_width, self.current_height, "axia-files");
 
         const buffer = &self.buffer.?;
-        render.draw(buffer.cr, self.current_width, self.current_height, self.browser.snapshot(), self.hovered);
+        render.draw(
+            buffer.cr,
+            self.current_width,
+            self.current_height,
+            self.browser.snapshot(),
+            self.hovered,
+            self.sidebar_collapsed,
+            &self.icons,
+        );
         c.cairo_surface_flush(buffer.surface);
         c.wl_surface_attach(self.wl_surface.?, buffer.buffer, 0, 0);
         c.wl_surface_damage_buffer(self.wl_surface.?, 0, 0, @intCast(self.current_width), @intCast(self.current_height));
@@ -148,7 +161,14 @@ pub const App = struct {
     }
 
     fn updateHover(self: *App) void {
-        const new_hovered = render.hitTest(self.current_width, self.current_height, self.pointer_x, self.pointer_y, self.browser.snapshot());
+        const new_hovered = render.hitTest(
+            self.current_width,
+            self.current_height,
+            self.pointer_x,
+            self.pointer_y,
+            self.browser.snapshot(),
+            self.sidebar_collapsed,
+        );
         if (!hitEquals(new_hovered, self.hovered)) {
             self.hovered = new_hovered;
             self.dirty = true;
@@ -176,9 +196,11 @@ pub const App = struct {
                 }
             },
             .close => self.running = false,
+            .toggle_sidebar => self.sidebar_collapsed = !self.sidebar_collapsed,
             .up => self.browser.goParent() catch {},
             .previous => self.browser.previousPage(),
             .next => self.browser.nextPage(),
+            .sort_modified => self.browser.toggleModifiedSort(),
             .sidebar => |target| self.browser.openSidebar(target) catch {},
             .entry => |index| self.browser.activateVisible(index) catch {},
         }
@@ -319,9 +341,11 @@ fn hitEquals(lhs: render.Hit, rhs: render.Hit) bool {
         .minimize => rhs == .minimize,
         .maximize => rhs == .maximize,
         .close => rhs == .close,
+        .toggle_sidebar => rhs == .toggle_sidebar,
         .up => rhs == .up,
         .previous => rhs == .previous,
         .next => rhs == .next,
+        .sort_modified => rhs == .sort_modified,
         .sidebar => |left_target| switch (rhs) {
             .sidebar => |right_target| left_target == right_target,
             else => false,
