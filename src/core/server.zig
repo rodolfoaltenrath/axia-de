@@ -7,6 +7,7 @@ const InputManager = @import("../input/manager.zig").InputManager;
 const LayerManager = @import("../layers/manager.zig").LayerManager;
 const PanelProcess = @import("../panel/process.zig").PanelProcess;
 const DockProcess = @import("../dock/process.zig").DockProcess;
+const LauncherProcess = @import("../apps/launcher/process.zig").LauncherProcess;
 const XdgManager = @import("../shell/xdg.zig").XdgManager;
 const DecorationManager = @import("../shell/decoration.zig").DecorationManager;
 const IpcServer = @import("../ipc/server.zig").IpcServer;
@@ -38,6 +39,7 @@ pub const Server = struct {
     layers: LayerManager,
     panel: PanelProcess,
     dock: DockProcess,
+    launcher: LauncherProcess,
     xdg: XdgManager,
     decorations: DecorationManager,
     ipc: IpcServer,
@@ -98,6 +100,7 @@ pub const Server = struct {
 
         const panel = PanelProcess.init(allocator);
         const dock = DockProcess.init(allocator);
+        const launcher = LauncherProcess.init(allocator);
 
         var xdg = try XdgManager.init(
             allocator,
@@ -162,6 +165,7 @@ pub const Server = struct {
             .layers = layers,
             .panel = panel,
             .dock = dock,
+            .launcher = launcher,
             .xdg = xdg,
             .decorations = decorations,
             .ipc = ipc,
@@ -206,6 +210,7 @@ pub const Server = struct {
         self.layers.deinit();
         self.panel.deinit();
         self.dock.deinit();
+        self.launcher.deinit();
         self.input.deinit();
         if (self.wallpaper) |wallpaper| wallpaper.deinit();
         self.desktop_menu.deinit();
@@ -334,6 +339,16 @@ pub const Server = struct {
     fn handleShortcut(ctx: ?*anyopaque, modifiers: u32, sym: c.xkb_keysym_t) bool {
         const raw_server = ctx orelse return false;
         const server: *Server = @ptrCast(@alignCast(raw_server));
+
+        if (sym == c.XKB_KEY_space and (modifiers & c.WLR_MODIFIER_ALT) != 0) {
+            server.launcher.spawn(server.socket_name);
+            return true;
+        }
+
+        if (sym == c.XKB_KEY_space and (modifiers & c.WLR_MODIFIER_LOGO) != 0) {
+            server.launcher.spawn(server.socket_name);
+            return true;
+        }
 
         if ((modifiers & c.WLR_MODIFIER_LOGO) == 0) return false;
 

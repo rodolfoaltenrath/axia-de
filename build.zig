@@ -66,6 +66,7 @@ pub fn build(b: *std.Build) void {
     client_wl_module.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
     client_wl_module.addIncludePath(.{ .cwd_relative = "/usr/include/pixman-1" });
     client_wl_module.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    client_wl_module.addIncludePath(.{ .cwd_relative = "/usr/include/xkbcommon" });
     client_wl_module.addIncludePath(xdg_shell_client_header.dirname());
     const client_buffer_module = b.createModule(.{
         .root_source_file = b.path("src/client/buffer.zig"),
@@ -181,6 +182,7 @@ pub fn build(b: *std.Build) void {
     launcher_app_exe.addCSourceFile(.{ .file = xdg_shell_client_code });
     launcher_app_exe.linkSystemLibrary("wayland-client");
     launcher_app_exe.linkSystemLibrary("cairo");
+    launcher_app_exe.linkSystemLibrary("xkbcommon");
     b.installArtifact(launcher_app_exe);
 
     const files_app_exe = b.addExecutable(.{

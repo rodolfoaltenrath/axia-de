@@ -240,6 +240,26 @@ pub const View = struct {
         self.setPosition(self.x, self.y);
     }
 
+    pub fn centerInUsableArea(self: *View) void {
+        const width = self.effectiveWidth();
+        const height = self.effectiveHeight();
+        const centered_x = self.usable_area.x + @divTrunc(self.usable_area.width - width, 2);
+        const centered_y = self.usable_area.y + @divTrunc(self.usable_area.height - height, 2);
+        self.restore_x = centered_x;
+        self.restore_y = centered_y;
+        self.setPosition(centered_x, centered_y);
+    }
+
+    pub fn isLauncher(self: *const View) bool {
+        if (self.toplevel.*.app_id != null and std.mem.eql(u8, std.mem.span(self.toplevel.*.app_id), "axia-launcher")) {
+            return true;
+        }
+        if (self.toplevel.*.title != null and std.mem.eql(u8, std.mem.span(self.toplevel.*.title), "Axia Launcher")) {
+            return true;
+        }
+        return false;
+    }
+
     fn titleOrFallback(toplevel: [*c]c.struct_wlr_xdg_toplevel) []const u8 {
         const raw_title = toplevel.*.title;
         if (raw_title != null) return std.mem.span(raw_title);
@@ -249,6 +269,9 @@ pub const View = struct {
     fn handleMap(listener: [*c]c.struct_wl_listener, _: ?*anyopaque) callconv(.c) void {
         const view: *View = @ptrCast(@as(*allowzero View, @fieldParentPtr("map", listener)));
         view.mapped = true;
+        if (view.isLauncher()) {
+            view.centerInUsableArea();
+        }
         view.syncVisibility();
         view.focus();
     }

@@ -7,6 +7,11 @@ const WorkspaceState = @import("workspace.zig").WorkspaceState;
 
 const log = std.log.scoped(.axia_xdg);
 
+const Position = struct {
+    x: i32,
+    y: i32,
+};
+
 pub const XdgManager = struct {
     allocator: std.mem.Allocator,
     seat: [*c]c.struct_wlr_seat,
@@ -129,6 +134,7 @@ pub const XdgManager = struct {
     }
 
     fn registerView(self: *XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) !void {
+        const initial_position = self.initialPositionForToplevel(toplevel);
         const view = try View.create(
             self.allocator,
             self.seat,
@@ -144,10 +150,17 @@ pub const XdgManager = struct {
             handleViewRequestMove,
             handleViewRequestResize,
             self.workspaces.current,
-            self.next_x,
-            self.next_y,
+            initial_position.x,
+            initial_position.y,
         );
         errdefer self.allocator.destroy(view);
+
+        if (self.isLauncherToplevel(toplevel)) {
+            view.restore_width = 760;
+            view.restore_height = 432;
+            const centered = self.initialPositionForLauncher();
+            view.setPosition(centered.x, centered.y);
+        }
 
         try self.views.append(self.allocator, view);
         view.setWorkspaceVisible(view.workspaceIndex() == self.workspaces.current);
@@ -161,6 +174,45 @@ pub const XdgManager = struct {
         const max_y = if (self.usable_area.height > 220) self.usable_area.y + 180 else base_y;
         if (self.next_x > max_x) self.next_x = base_x;
         if (self.next_y > max_y) self.next_y = base_y;
+    }
+
+    fn initialPositionForToplevel(self: *XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) Position {
+        if (self.isLauncherToplevel(toplevel)) {
+            return self.initialPositionForLauncher();
+        }
+
+        return .{ .x = self.next_x, .y = self.next_y };
+    }
+
+    fn initialPositionForLauncher(self: *const XdgManager) Position {
+        const launcher_width: i32 = 760;
+        const launcher_height: i32 = 432;
+        const output_area = self.outputArea();
+        return .{
+            .x = output_area.x + @divTrunc(output_area.width - launcher_width, 2),
+            .y = output_area.y + @divTrunc(output_area.height - launcher_height, 2),
+        };
+    }
+
+    fn isLauncherToplevel(self: *const XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) bool {
+        _ = self;
+        if (toplevel.*.app_id != null and std.mem.eql(u8, std.mem.span(toplevel.*.app_id), "axia-launcher")) {
+            return true;
+        }
+        if (toplevel.*.title != null and std.mem.eql(u8, std.mem.span(toplevel.*.title), "Axia Launcher")) {
+            return true;
+        }
+        return false;
+    }
+
+    fn outputArea(self: *const XdgManager) c.struct_wlr_box {
+        var area: c.struct_wlr_box = std.mem.zeroes(c.struct_wlr_box);
+        const primary_output = self.primary_output orelse return self.usable_area;
+        c.wlr_output_layout_get_box(self.output_layout, primary_output, &area);
+        if (area.width <= 0 or area.height <= 0) {
+            return self.usable_area;
+        }
+        return area;
     }
 
     fn unregisterView(self: *XdgManager, target: *View) void {
