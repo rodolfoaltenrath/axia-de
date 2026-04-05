@@ -1,22 +1,12 @@
 const std = @import("std");
 const c = @import("client_wl").c;
+const chrome = @import("client_chrome");
 const browser = @import("browser.zig");
 const icons = @import("icons.zig");
 
-pub const Rect = struct {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
+pub const Rect = chrome.Rect;
 
-    pub fn contains(self: Rect, px: f64, py: f64) bool {
-        return px >= self.x and px <= self.x + self.width and py >= self.y and py <= self.y + self.height;
-    }
-};
-
-const window_margin = 4.0;
-const window_radius = 16.0;
-const titlebar_height = 46.0;
+const titlebar_height = chrome.titlebar_height;
 const sidebar_expanded_width = 294.0;
 const sidebar_collapsed_width = 64.0;
 const content_padding = 18.0;
@@ -61,8 +51,8 @@ pub fn draw(
     const sidebar = sidebarRect(width, height, sidebar_collapsed);
     const content = contentRect(width, height, sidebar_collapsed);
 
-    drawWindowSurface(cr, root);
-    drawTitlebar(cr, width, hovered, sidebar_collapsed);
+    _ = root;
+    drawTitlebar(cr, width, height, hovered, sidebar_collapsed);
     drawSidebar(cr, sidebar, snapshot, hovered, sidebar_collapsed, sidebar_icons);
     drawContent(cr, width, height, content, snapshot, hovered, sidebar_collapsed);
 }
@@ -98,17 +88,12 @@ pub fn hitTest(
         }
     }
 
-    if (titlebarDragRect(width).contains(x, y)) return .titlebar;
+    if (titlebarDragRect(width, height).contains(x, y)) return .titlebar;
     return .none;
 }
 
 fn rootRect(width: u32, height: u32) Rect {
-    return .{
-        .x = window_margin,
-        .y = window_margin,
-        .width = @as(f64, @floatFromInt(width)) - window_margin * 2.0,
-        .height = @as(f64, @floatFromInt(height)) - window_margin * 2.0,
-    };
+    return chrome.rootRect(width, height);
 }
 
 fn sidebarWidth(collapsed: bool) f64 {
@@ -136,14 +121,8 @@ fn contentRect(width: u32, height: u32, collapsed: bool) Rect {
     };
 }
 
-fn titlebarDragRect(width: u32) Rect {
-    const root = rootRect(width, 580);
-    return .{
-        .x = root.x + 94,
-        .y = root.y + 2,
-        .width = root.width - 210,
-        .height = titlebar_height - 4,
-    };
+fn titlebarDragRect(width: u32, height: u32) Rect {
+    return chrome.titlebarDragRect(width, height, 120, 120);
 }
 
 fn toggleSidebarRect() Rect {
@@ -155,18 +134,15 @@ fn appGlyphRect() Rect {
 }
 
 fn minimizeRect(width: u32) Rect {
-    const right = @as(f64, @floatFromInt(width)) - 34;
-    return .{ .x = right - 88, .y = 14, .width = 18, .height = 18 };
+    return chrome.minimizeRect(width);
 }
 
 fn maximizeRect(width: u32) Rect {
-    const right = @as(f64, @floatFromInt(width)) - 34;
-    return .{ .x = right - 52, .y = 14, .width = 18, .height = 18 };
+    return chrome.maximizeRect(width);
 }
 
 fn closeRect(width: u32) Rect {
-    const right = @as(f64, @floatFromInt(width)) - 34;
-    return .{ .x = right - 16, .y = 14, .width = 18, .height = 18 };
+    return chrome.closeRect(width);
 }
 
 fn previousRect(width: u32, height: u32, collapsed: bool) Rect {
@@ -204,48 +180,13 @@ fn entryRect(width: u32, height: u32, index: usize, collapsed: bool) Rect {
     };
 }
 
-fn drawWindowSurface(cr: *c.cairo_t, root: Rect) void {
-    drawRoundedRect(cr, root, window_radius);
-    c.cairo_set_source_rgba(cr, 0.105, 0.105, 0.11, 0.97);
-    c.cairo_fill_preserve(cr);
-    c.cairo_set_source_rgba(cr, 0.40, 0.95, 1.0, 0.95);
-    c.cairo_set_line_width(cr, 2.0);
-    c.cairo_stroke(cr);
-
-    drawRoundedRect(cr, .{
-        .x = root.x + 1.5,
-        .y = root.y + 1.5,
-        .width = root.width - 3.0,
-        .height = root.height - 3.0,
-    }, window_radius - 1.5);
-    c.cairo_set_source_rgba(cr, 1, 1, 1, 0.04);
-    c.cairo_set_line_width(cr, 1.0);
-    c.cairo_stroke(cr);
-}
-
-fn drawTitlebar(cr: *c.cairo_t, width: u32, hovered: Hit, sidebar_collapsed: bool) void {
-    const root = rootRect(width, 580);
-    const bar = Rect{
-        .x = root.x + 1,
-        .y = root.y + 1,
-        .width = root.width - 2,
-        .height = titlebar_height,
-    };
-
-    c.cairo_rectangle(cr, bar.x, bar.y, bar.width, bar.height);
-    c.cairo_set_source_rgba(cr, 0.11, 0.11, 0.115, 1.0);
-    c.cairo_fill(cr);
-
-    c.cairo_rectangle(cr, bar.x, bar.y + bar.height - 1, bar.width, 1);
-    c.cairo_set_source_rgba(cr, 1, 1, 1, 0.04);
-    c.cairo_fill(cr);
-
+fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, hovered: Hit, sidebar_collapsed: bool) void {
+    chrome.drawWindowShell(cr, width, height, .{
+        .title = "Arquivos",
+        .title_x = 86,
+    }, hoveredControl(hovered));
     drawTopGlyphButton(cr, toggleSidebarRect(), "=", hovered == .toggle_sidebar);
     drawTopGlyphButton(cr, appGlyphRect(), if (sidebar_collapsed) ">" else "<", false);
-
-    drawWindowGlyph(cr, minimizeRect(width), "-", hovered == .minimize);
-    drawWindowGlyph(cr, maximizeRect(width), "+", hovered == .maximize);
-    drawWindowGlyph(cr, closeRect(width), "x", hovered == .close);
 }
 
 fn drawSidebar(
@@ -492,20 +433,6 @@ fn drawTopGlyphButton(cr: *c.cairo_t, rect: Rect, glyph: []const u8, hovered: bo
     drawCenteredLabel(cr, rect, 16, glyph, 0.39, 0.91, 1.0);
 }
 
-fn drawWindowGlyph(cr: *c.cairo_t, rect: Rect, glyph: []const u8, hovered: bool) void {
-    if (hovered) {
-        drawRoundedRect(cr, .{
-            .x = rect.x - 6,
-            .y = rect.y - 5,
-            .width = rect.width + 12,
-            .height = rect.height + 10,
-        }, 8);
-        c.cairo_set_source_rgba(cr, 1, 1, 1, 0.06);
-        c.cairo_fill(cr);
-    }
-    drawCenteredLabel(cr, rect, 15, glyph, 0.38, 0.90, 0.99);
-}
-
 fn drawToolbarButton(cr: *c.cairo_t, rect: Rect, label: []const u8, hovered: bool) void {
     if (hovered) {
         drawRoundedRect(cr, .{
@@ -589,50 +516,25 @@ fn drawSidebarIcon(
     drawCenteredLabel(cr, rect, 14, fallback, r, g, b);
 }
 
+fn hoveredControl(hit: Hit) chrome.HoveredControl {
+    return switch (hit) {
+        .minimize => .minimize,
+        .maximize => .maximize,
+        .close => .close,
+        else => .none,
+    };
+}
+
 fn drawRoundedRect(cr: *c.cairo_t, rect: Rect, radius: f64) void {
-    const right = rect.x + rect.width;
-    const bottom = rect.y + rect.height;
-    c.cairo_new_sub_path(cr);
-    c.cairo_arc(cr, right - radius, rect.y + radius, radius, -std.math.pi / 2.0, 0.0);
-    c.cairo_arc(cr, right - radius, bottom - radius, radius, 0.0, std.math.pi / 2.0);
-    c.cairo_arc(cr, rect.x + radius, bottom - radius, radius, std.math.pi / 2.0, std.math.pi);
-    c.cairo_arc(cr, rect.x + radius, rect.y + radius, radius, std.math.pi, 3.0 * std.math.pi / 2.0);
-    c.cairo_close_path(cr);
+    chrome.drawRoundedRect(cr, rect, radius);
 }
 
 fn drawLabel(cr: *c.cairo_t, x: f64, y: f64, size: f64, text: []const u8, r: f64, g: f64, b: f64) void {
-    var text_buf: [512]u8 = undefined;
-    const c_text = toCString(&text_buf, text);
-    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_NORMAL);
-    c.cairo_set_font_size(cr, size);
-    c.cairo_set_source_rgb(cr, r, g, b);
-    c.cairo_move_to(cr, x, y);
-    c.cairo_show_text(cr, c_text.ptr);
+    chrome.drawLabel(cr, x, y, size, text, r, g, b, c.CAIRO_FONT_WEIGHT_NORMAL);
 }
 
 fn drawCenteredLabel(cr: *c.cairo_t, rect: Rect, size: f64, text: []const u8, r: f64, g: f64, b: f64) void {
-    var text_buf: [128]u8 = undefined;
-    const c_text = toCString(&text_buf, text);
-    var extents: c.cairo_text_extents_t = undefined;
-    var font_extents: c.cairo_font_extents_t = undefined;
-    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_NORMAL);
-    c.cairo_set_font_size(cr, size);
-    c.cairo_text_extents(cr, c_text.ptr, &extents);
-    c.cairo_font_extents(cr, &font_extents);
-    c.cairo_set_source_rgb(cr, r, g, b);
-    c.cairo_move_to(
-        cr,
-        rect.x + (rect.width - extents.width) / 2.0 - extents.x_bearing,
-        rect.y + (rect.height - font_extents.height) / 2.0 + font_extents.ascent,
-    );
-    c.cairo_show_text(cr, c_text.ptr);
-}
-
-fn toCString(buffer: []u8, text: []const u8) [:0]u8 {
-    const max_len = @min(text.len, buffer.len - 1);
-    @memcpy(buffer[0..max_len], text[0..max_len]);
-    buffer[max_len] = 0;
-    return buffer[0..max_len :0];
+    chrome.drawCenteredLabel(cr, rect, size, text, r, g, b);
 }
 
 fn basenameLabel(current_dir: []const u8) []const u8 {

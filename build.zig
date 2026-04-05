@@ -74,6 +74,27 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     client_buffer_module.addImport("client_wl", client_wl_module);
+    const client_chrome_module = b.createModule(.{
+        .root_source_file = b.path("src/client/chrome.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    client_chrome_module.addImport("client_wl", client_wl_module);
+    const settings_model_module = b.createModule(.{
+        .root_source_file = b.path("src/settings/model.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const settings_files_module = b.createModule(.{
+        .root_source_file = b.path("src/settings/files.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const prefs_module = b.createModule(.{
+        .root_source_file = b.path("src/config/preferences.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const exe = b.addExecutable(.{
         .name = "axia-de",
@@ -172,6 +193,7 @@ pub fn build(b: *std.Build) void {
     launcher_app_exe.root_module.addImport("apps_catalog", apps_catalog_module);
     launcher_app_exe.root_module.addImport("client_wl", client_wl_module);
     launcher_app_exe.root_module.addImport("client_buffer", client_buffer_module);
+    launcher_app_exe.root_module.addImport("client_chrome", client_chrome_module);
     launcher_app_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     launcher_app_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     launcher_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
@@ -196,6 +218,7 @@ pub fn build(b: *std.Build) void {
     files_app_exe.linkLibC();
     files_app_exe.root_module.addImport("client_wl", client_wl_module);
     files_app_exe.root_module.addImport("client_buffer", client_buffer_module);
+    files_app_exe.root_module.addImport("client_chrome", client_chrome_module);
     files_app_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     files_app_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     files_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
@@ -207,6 +230,33 @@ pub fn build(b: *std.Build) void {
     files_app_exe.linkSystemLibrary("wayland-client");
     files_app_exe.linkSystemLibrary("cairo");
     b.installArtifact(files_app_exe);
+
+    const settings_app_exe = b.addExecutable(.{
+        .name = "axia-settings",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/apps/settings/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    settings_app_exe.linkLibC();
+    settings_app_exe.root_module.addImport("client_wl", client_wl_module);
+    settings_app_exe.root_module.addImport("client_buffer", client_buffer_module);
+    settings_app_exe.root_module.addImport("client_chrome", client_chrome_module);
+    settings_app_exe.root_module.addImport("settings_model", settings_model_module);
+    settings_app_exe.root_module.addImport("settings_files", settings_files_module);
+    settings_app_exe.root_module.addImport("axia_prefs", prefs_module);
+    settings_app_exe.step.dependOn(&gen_xdg_shell_client_header.step);
+    settings_app_exe.step.dependOn(&gen_xdg_shell_client_code.step);
+    settings_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    settings_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
+    settings_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/pixman-1" });
+    settings_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    settings_app_exe.addIncludePath(xdg_shell_client_header.dirname());
+    settings_app_exe.addCSourceFile(.{ .file = xdg_shell_client_code });
+    settings_app_exe.linkSystemLibrary("wayland-client");
+    settings_app_exe.linkSystemLibrary("cairo");
+    b.installArtifact(settings_app_exe);
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

@@ -138,7 +138,7 @@ pub fn drawPanel(cr: *c.cairo_t, state: State) void {
 
     switch (state.page) {
         .wallpapers => drawWallpaperPage(cr, state),
-        .appearance, .panel, .displays, .workspaces, .about => drawPlaceholderPage(cr, state.page),
+        .appearance, .panel, .displays, .workspaces, .network, .bluetooth, .printers, .about => drawPlaceholderPage(cr, state.page),
     }
 }
 
@@ -191,6 +191,9 @@ fn drawPlaceholderPage(cr: *c.cairo_t, page: model.Page) void {
         .panel => "Aqui vamos configurar painel, relógio e launcher.",
         .displays => "Aqui vamos ajustar monitores e escala.",
         .workspaces => "Aqui vamos configurar áreas de trabalho.",
+        .network => "Aqui vamos gerenciar Wi‑Fi, Ethernet e conexões.",
+        .bluetooth => "Aqui vamos gerenciar dispositivos Bluetooth.",
+        .printers => "Aqui vamos gerenciar impressoras e filas.",
         .about => "Aqui vai entrar identidade e versão do Axia-DE.",
         else => "Em breve.",
     };
@@ -205,6 +208,9 @@ fn pageText(page: model.Page) struct { []const u8, []const u8 } {
         .panel => .{ "Painel Superior", "Organização, widgets e comportamento do topo" },
         .displays => .{ "Monitores", "Saídas, escala e posicionamento de telas" },
         .workspaces => .{ "Áreas de Trabalho", "Fluxo entre espaços e comportamento das janelas" },
+        .network => .{ "Rede", "Wi‑Fi, Ethernet e conectividade do desktop" },
+        .bluetooth => .{ "Bluetooth", "Acessórios, áudio e pareamento" },
+        .printers => .{ "Impressoras", "Fila, descoberta e dispositivos" },
         .about => .{ "Sobre o Axia-DE", "Informações da sessão e da identidade do projeto" },
     };
 }

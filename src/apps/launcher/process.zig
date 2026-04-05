@@ -10,7 +10,7 @@ pub const LauncherProcess = struct {
         return .{ .allocator = allocator };
     }
 
-    pub fn spawn(self: *LauncherProcess, socket_name: [*c]const u8) void {
+    pub fn spawn(self: *LauncherProcess, socket_name: [*c]const u8, ipc_socket_path: []const u8) void {
         if (self.child) |*child| {
             _ = child.kill() catch |err| switch (err) {
                 error.AlreadyTerminated => {},
@@ -67,6 +67,10 @@ pub const LauncherProcess = struct {
         };
         env_map.put("AXIA_BIN_DIR", exe_dir) catch |err| {
             log.err("failed to set AXIA_BIN_DIR for launcher: {}", .{err});
+            return;
+        };
+        env_map.put("AXIA_IPC_SOCKET", ipc_socket_path) catch |err| {
+            log.err("failed to set AXIA_IPC_SOCKET for launcher: {}", .{err});
             return;
         };
 

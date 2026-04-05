@@ -39,6 +39,11 @@ pub fn moveFocusedToWorkspace(allocator: std.mem.Allocator, socket_path: []const
     return parseWorkspaceState(response);
 }
 
+pub fn toggleLauncher(allocator: std.mem.Allocator, socket_path: []const u8) !void {
+    const response = try request(allocator, socket_path, "launcher toggle\n");
+    defer allocator.free(response);
+}
+
 fn request(allocator: std.mem.Allocator, socket_path: []const u8, payload: []const u8) ![]u8 {
     const address = try std.net.Address.initUnix(socket_path);
     const fd = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC, 0);

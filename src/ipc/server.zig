@@ -23,6 +23,8 @@ pub const WorkspaceSnapshot = struct {
 pub const GetWorkspaceStateCallback = *const fn (?*anyopaque) WorkspaceSnapshot;
 pub const ActivateWorkspaceCallback = *const fn (?*anyopaque, usize) void;
 pub const MoveFocusedWorkspaceCallback = *const fn (?*anyopaque, usize) void;
+pub const SetWallpaperCallback = *const fn (?*anyopaque, []const u8) void;
+pub const ToggleLauncherCallback = *const fn (?*anyopaque) void;
 
 pub const IpcServer = struct {
     allocator: std.mem.Allocator,
@@ -34,6 +36,8 @@ pub const IpcServer = struct {
     get_workspace_state_cb: ?GetWorkspaceStateCallback = null,
     activate_workspace_cb: ?ActivateWorkspaceCallback = null,
     move_focused_workspace_cb: ?MoveFocusedWorkspaceCallback = null,
+    set_wallpaper_cb: ?SetWallpaperCallback = null,
+    toggle_launcher_cb: ?ToggleLauncherCallback = null,
 
     pub fn init(allocator: std.mem.Allocator) IpcServer {
         return .{ .allocator = allocator };
@@ -69,11 +73,15 @@ pub const IpcServer = struct {
         get_workspace_state_cb: GetWorkspaceStateCallback,
         activate_workspace_cb: ActivateWorkspaceCallback,
         move_focused_workspace_cb: MoveFocusedWorkspaceCallback,
+        set_wallpaper_cb: SetWallpaperCallback,
+        toggle_launcher_cb: ToggleLauncherCallback,
     ) void {
         self.ctx = ctx;
         self.get_workspace_state_cb = get_workspace_state_cb;
         self.activate_workspace_cb = activate_workspace_cb;
         self.move_focused_workspace_cb = move_focused_workspace_cb;
+        self.set_wallpaper_cb = set_wallpaper_cb;
+        self.toggle_launcher_cb = toggle_launcher_cb;
     }
 
     pub fn deinit(self: *IpcServer) void {
@@ -142,6 +150,27 @@ pub const IpcServer = struct {
                 callback(self.ctx, index);
             }
             self.writeWorkspaceState(client_fd);
+            return;
+        }
+
+        if (std.mem.startsWith(u8, request, "wallpaper set ")) {
+            const wallpaper_path = std.mem.trim(u8, request["wallpaper set ".len..], " \r\n\t");
+            if (wallpaper_path.len == 0) {
+                _ = std.posix.write(client_fd, "error invalid-path\n") catch {};
+                return;
+            }
+            if (self.set_wallpaper_cb) |callback| {
+                callback(self.ctx, wallpaper_path);
+            }
+            _ = std.posix.write(client_fd, "ok\n") catch {};
+            return;
+        }
+
+        if (std.mem.eql(u8, request, "launcher toggle")) {
+            if (self.toggle_launcher_cb) |callback| {
+                callback(self.ctx);
+            }
+            _ = std.posix.write(client_fd, "ok\n") catch {};
             return;
         }
 

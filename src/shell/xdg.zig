@@ -252,6 +252,28 @@ pub const XdgManager = struct {
         return self.hitTest(lx, ly) != null;
     }
 
+    pub fn dismissLauncherIfOutside(self: *XdgManager, lx: f64, ly: f64) void {
+        const launcher = self.findLauncherView() orelse return;
+
+        if (self.hitTest(lx, ly)) |hit| {
+            if (hit.view == launcher) return;
+        }
+
+        if (self.focused_view == launcher) {
+            self.clearFocus();
+        }
+        c.wlr_xdg_toplevel_send_close(launcher.toplevel);
+    }
+
+    pub fn dismissLauncher(self: *XdgManager) bool {
+        const launcher = self.findLauncherView() orelse return false;
+        if (self.focused_view == launcher) {
+            self.clearFocus();
+        }
+        c.wlr_xdg_toplevel_send_close(launcher.toplevel);
+        return true;
+    }
+
     pub fn clearDesktopFocus(self: *XdgManager) void {
         c.wlr_seat_pointer_notify_clear_focus(self.seat);
         self.clearFocus();
@@ -321,6 +343,15 @@ pub const XdgManager = struct {
             focused_view.unfocus();
             self.focused_view = null;
         }
+    }
+
+    fn findLauncherView(self: *XdgManager) ?*View {
+        for (self.views.items) |view| {
+            if (view.isLauncher() and view.mappedVisible()) {
+                return view;
+            }
+        }
+        return null;
     }
 
     fn syncWorkspaceVisibility(self: *XdgManager) void {

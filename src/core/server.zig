@@ -186,7 +186,7 @@ pub const Server = struct {
         self.layers.setupListeners();
         self.xdg.setupListeners();
         self.decorations.setupListeners();
-        self.ipc.setWorkspaceCallbacks(self, ipcGetWorkspaceState, ipcActivateWorkspace, ipcMoveFocusedWorkspace);
+        self.ipc.setWorkspaceCallbacks(self, ipcGetWorkspaceState, ipcActivateWorkspace, ipcMoveFocusedWorkspace, ipcSetWallpaper, ipcToggleLauncher);
         self.desktop_menu.setActionCallback(self, handleDesktopAction);
         self.settings.setApplyWallpaperCallback(self, handleApplyWallpaper);
     }
@@ -317,6 +317,9 @@ pub const Server = struct {
     ) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
+        if (state == c.WL_POINTER_BUTTON_STATE_PRESSED) {
+            server.xdg.dismissLauncherIfOutside(lx, ly);
+        }
         if (server.layers.handlePointerButton(time_msec, button, state, lx, ly)) return;
         if (server.settings.handlePointerButton(button, state, lx, ly)) return;
         if (server.desktop_menu.handlePointerButton(button, state, lx, ly)) return;
@@ -341,12 +344,12 @@ pub const Server = struct {
         const server: *Server = @ptrCast(@alignCast(raw_server));
 
         if (sym == c.XKB_KEY_space and (modifiers & c.WLR_MODIFIER_ALT) != 0) {
-            server.launcher.spawn(server.socket_name);
+            server.toggleLauncher();
             return true;
         }
 
         if (sym == c.XKB_KEY_space and (modifiers & c.WLR_MODIFIER_LOGO) != 0) {
-            server.launcher.spawn(server.socket_name);
+            server.toggleLauncher();
             return true;
         }
 
@@ -389,6 +392,20 @@ pub const Server = struct {
         server.xdg.moveFocusedViewToWorkspace(workspace_index);
     }
 
+    fn ipcSetWallpaper(ctx: ?*anyopaque, path: []const u8) void {
+        const raw_server = ctx orelse return;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        server.applyWallpaper(path) catch |err| {
+            log.err("failed to apply wallpaper via ipc: {}", .{err});
+        };
+    }
+
+    fn ipcToggleLauncher(ctx: ?*anyopaque) void {
+        const raw_server = ctx orelse return;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        server.toggleLauncher();
+    }
+
     fn handleDesktopAction(ctx: ?*anyopaque, action: DesktopAction) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
@@ -427,5 +444,10 @@ pub const Server = struct {
         try Preferences.saveWallpaper(self.allocator, path);
         if (old_wallpaper) |wallpaper| wallpaper.deinit();
         log.info("wallpaper applied: {s}", .{path});
+    }
+
+    fn toggleLauncher(self: *Server) void {
+        if (self.xdg.dismissLauncher()) return;
+        self.launcher.spawn(self.socket_name, self.ipc.path());
     }
 };

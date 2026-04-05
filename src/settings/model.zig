@@ -4,6 +4,9 @@ pub const Page = enum {
     panel,
     displays,
     workspaces,
+    network,
+    bluetooth,
+    printers,
     about,
 };
 

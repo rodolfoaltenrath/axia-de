@@ -12,6 +12,7 @@ const default_output_width: u32 = 1366;
 
 const SurfaceRole = enum {
     panel,
+    dismiss_overlay,
     clock_popup,
     launcher_popup,
     workspace_popup,
@@ -73,6 +74,7 @@ pub const App = struct {
     pointer_role: ?SurfaceRole = null,
     panel_hovered: render.HoverTarget = .none,
     panel: SurfaceState = .{ .role = .panel },
+    dismiss_overlay: SurfaceState = .{ .role = .dismiss_overlay },
     popup: SurfaceState = .{ .role = .clock_popup },
     launcher_popup: SurfaceState = .{ .role = .launcher_popup },
     workspace_popup: SurfaceState = .{ .role = .workspace_popup },
@@ -130,6 +132,7 @@ pub const App = struct {
         self.workspace_popup.destroy();
         self.launcher_popup.destroy();
         self.popup.destroy();
+        self.dismiss_overlay.destroy();
         self.panel.destroy();
 
         if (self.pointer) |pointer| c.wl_pointer_destroy(pointer);
@@ -220,6 +223,7 @@ pub const App = struct {
 
     fn createClockPopup(self: *App) !void {
         if (self.popup.layer_surface != null) return;
+        try self.ensureDismissOverlay();
 
         const compositor = self.compositor orelse return error.CompositorMissing;
         const layer_shell = self.layer_shell orelse return error.LayerShellMissing;
@@ -258,6 +262,7 @@ pub const App = struct {
 
     fn createWorkspacePopup(self: *App) !void {
         if (self.workspace_popup.layer_surface != null) return;
+        try self.ensureDismissOverlay();
 
         const compositor = self.compositor orelse return error.CompositorMissing;
         const layer_shell = self.layer_shell orelse return error.LayerShellMissing;
@@ -299,6 +304,7 @@ pub const App = struct {
 
     fn createLauncherPopup(self: *App) !void {
         if (self.launcher_popup.layer_surface != null) return;
+        try self.ensureDismissOverlay();
 
         const compositor = self.compositor orelse return error.CompositorMissing;
         const layer_shell = self.layer_shell orelse return error.LayerShellMissing;
@@ -338,6 +344,52 @@ pub const App = struct {
         self.launcher_popup.destroy();
     }
 
+    fn ensureDismissOverlay(self: *App) !void {
+        if (self.dismiss_overlay.layer_surface != null) return;
+
+        const compositor = self.compositor orelse return error.CompositorMissing;
+        const layer_shell = self.layer_shell orelse return error.LayerShellMissing;
+
+        const wl_surface = c.wl_compositor_create_surface(compositor) orelse return error.SurfaceCreateFailed;
+        errdefer c.wl_surface_destroy(wl_surface);
+
+        const layer_surface = c.zwlr_layer_shell_v1_get_layer_surface(
+            layer_shell,
+            wl_surface,
+            null,
+            c.ZWLR_LAYER_SHELL_V1_LAYER_TOP,
+            "axia-panel-dismiss",
+        ) orelse return error.LayerSurfaceCreateFailed;
+
+        c.zwlr_layer_surface_v1_set_anchor(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+                c.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+                c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
+                c.ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM,
+        );
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height, 0, 0, 0);
+        c.zwlr_layer_surface_v1_set_size(layer_surface, 0, 0);
+        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
+        c.zwlr_layer_surface_v1_set_keyboard_interactivity(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE,
+        );
+
+        self.dismiss_overlay.wl_surface = wl_surface;
+        self.dismiss_overlay.layer_surface = layer_surface;
+        self.dismiss_overlay.dirty = true;
+        self.installSurfaceListeners(&self.dismiss_overlay);
+        c.wl_surface_commit(wl_surface);
+    }
+
+    fn updateDismissOverlay(self: *App) void {
+        const keep = self.clock_popup_visible or self.workspace_popup_visible or self.launcher_popup_visible;
+        if (!keep) {
+            self.dismiss_overlay.destroy();
+        }
+    }
+
     fn installSurfaceListeners(self: *App, surface: *SurfaceState) void {
         _ = self;
         surface.layer_listener = .{
@@ -356,6 +408,7 @@ pub const App = struct {
 
     fn redrawIfNeeded(self: *App) !void {
         if (self.panel.dirty) try self.drawSurface(&self.panel);
+        if (self.dismiss_overlay.layer_surface != null and self.dismiss_overlay.dirty) try self.drawSurface(&self.dismiss_overlay);
         if (self.clock_popup_visible and self.popup.dirty) try self.drawSurface(&self.popup);
         if (self.launcher_popup_visible and self.launcher_popup.dirty) try self.drawSurface(&self.launcher_popup);
         if (self.workspace_popup_visible and self.workspace_popup.dirty) try self.drawSurface(&self.workspace_popup);
@@ -379,6 +432,7 @@ pub const App = struct {
         const buffer = &surface.buffer.?;
         switch (surface.role) {
             .panel => render.drawPanel(buffer.cr, surface.width, surface.height, self.now, self.panel_hovered),
+            .dismiss_overlay => drawDismissOverlay(buffer.cr),
             .clock_popup => render.drawCalendarPopup(buffer.cr, surface.width, surface.height, self.month_cursor, self.now),
             .launcher_popup => launcher.drawPopup(buffer.cr, surface.width, surface.height),
             .workspace_popup => workspaces.drawPopup(buffer.cr, surface.width, surface.height, self.workspace_state),
@@ -394,6 +448,7 @@ pub const App = struct {
             log.info("drawn {s} surface at {}x{}", .{
                 switch (surface.role) {
                     .panel => "panel",
+                    .dismiss_overlay => "dismiss-overlay",
                     .clock_popup => "clock-popup",
                     .launcher_popup => "launcher-popup",
                     .workspace_popup => "workspace-popup",
@@ -412,6 +467,7 @@ pub const App = struct {
         self.now = now;
         self.displayed_minute_stamp = new_stamp;
         self.panel.dirty = true;
+        if (self.dismiss_overlay.layer_surface != null) self.dismiss_overlay.dirty = true;
         if (self.clock_popup_visible) self.popup.dirty = true;
         if (self.launcher_popup_visible) self.launcher_popup.dirty = true;
         if (self.workspace_popup_visible) self.workspace_popup.dirty = true;
@@ -464,14 +520,23 @@ pub const App = struct {
             return;
         }
 
+        if (self.pointer_role == .dismiss_overlay) {
+            if (self.clock_popup_visible) self.toggleClockPopup();
+            if (self.launcher_popup_visible) self.toggleLauncherPopup();
+            if (self.workspace_popup_visible) self.toggleWorkspacePopup();
+            return;
+        }
+
         const metrics = render.computePanelMetrics(self.panel.width, panel_height);
         if (metrics.clock.contains(x, y)) {
             self.toggleClockPopup();
             return;
         }
         if (metrics.apps.contains(x, y)) {
-            self.spawnCommand("exec \"$AXIA_BIN_DIR/axia-launcher\"") catch |err| {
-                log.err("failed to launch Axia Launcher: {}", .{err});
+            self.closeOtherPopups(.panel);
+            const socket_path = self.ipc_socket_path orelse return;
+            ipc.toggleLauncher(self.allocator, socket_path) catch |err| {
+                log.err("failed to toggle Axia Launcher: {}", .{err});
             };
             return;
         }
@@ -500,6 +565,7 @@ pub const App = struct {
             self.popup.dirty = true;
         } else {
             self.destroyClockPopup();
+            self.updateDismissOverlay();
         }
     }
 
@@ -515,6 +581,7 @@ pub const App = struct {
             self.launcher_popup.dirty = true;
         } else {
             self.destroyLauncherPopup();
+            self.updateDismissOverlay();
         }
     }
 
@@ -531,6 +598,7 @@ pub const App = struct {
             self.workspace_popup.dirty = true;
         } else {
             self.destroyWorkspacePopup();
+            self.updateDismissOverlay();
         }
     }
 
@@ -634,12 +702,14 @@ pub const App = struct {
         c.zwlr_layer_surface_v1_ack_configure(zwlr_surface, serial);
         surface.width = if (width == 0) switch (surface.role) {
             .panel => default_output_width,
+            .dismiss_overlay => default_output_width,
             .clock_popup => popup_width,
             .launcher_popup => launcher.popup_width,
             .workspace_popup => workspaces.popup_width,
         } else width;
         surface.height = if (height == 0) switch (surface.role) {
             .panel => panel_height,
+            .dismiss_overlay => 720,
             .clock_popup => popup_height,
             .launcher_popup => launcher.popup_height,
             .workspace_popup => workspaces.popup_height,
@@ -652,6 +722,7 @@ pub const App = struct {
             log.info("configured {s} surface at {}x{}", .{
                 switch (surface.role) {
                     .panel => "panel",
+                    .dismiss_overlay => "dismiss-overlay",
                     .clock_popup => "clock-popup",
                     .launcher_popup => "launcher-popup",
                     .workspace_popup => "workspace-popup",
@@ -682,6 +753,8 @@ pub const App = struct {
         app.pointer_y = c.wl_fixed_to_double(surface_y);
         if (app.panel.wl_surface == wl_surface) {
             app.pointer_role = .panel;
+        } else if (app.dismiss_overlay.wl_surface != null and app.dismiss_overlay.wl_surface.? == wl_surface) {
+            app.pointer_role = .dismiss_overlay;
         } else if (app.popup.wl_surface != null and app.popup.wl_surface.? == wl_surface) {
             app.pointer_role = .clock_popup;
         } else if (app.launcher_popup.wl_surface != null and app.launcher_popup.wl_surface.? == wl_surface) {
@@ -725,3 +798,10 @@ pub const App = struct {
     fn handlePointerAxisValue120(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: i32) callconv(.c) void {}
     fn handlePointerAxisRelativeDirection(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: u32) callconv(.c) void {}
 };
+
+fn drawDismissOverlay(cr: *c.cairo_t) void {
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+    c.cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    c.cairo_paint(cr);
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
+}

@@ -114,7 +114,7 @@ pub const App = struct {
         const toplevel = c.xdg_surface_get_toplevel(xdg_surface) orelse return error.XdgToplevelCreateFailed;
         errdefer c.xdg_toplevel_destroy(toplevel);
 
-        c.xdg_toplevel_set_title(toplevel, "Axia Files");
+        c.xdg_toplevel_set_title(toplevel, "Arquivos");
         c.xdg_toplevel_set_app_id(toplevel, "axia-files");
 
         self.wm_base_listener = .{ .ping = handlePing };

@@ -1,17 +1,9 @@
 const std = @import("std");
 const c = @import("client_wl").c;
+const chrome = @import("client_chrome");
 const model = @import("model.zig");
 
-pub const Rect = struct {
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
-
-    pub fn contains(self: Rect, px: f64, py: f64) bool {
-        return px >= self.x and px <= self.x + self.width and py >= self.y and py <= self.y + self.height;
-    }
-};
+pub const Rect = chrome.Rect;
 
 pub fn visibleResultLimit(height: u32) usize {
     const total_height = @as(i32, @intCast(height));
@@ -26,7 +18,7 @@ pub fn cardRect(width: u32, height: u32, has_query: bool, result_count: usize) R
     const card_width = @min(total_width - 56.0, 664.0);
     const top_margin = 24.0;
     const bottom_margin = 24.0;
-    const visible_results = @min(result_count, 5);
+    const visible_results = @min(result_count, visibleResultLimit(height));
     const desired_height = if (!has_query)
         98.0
     else if (visible_results == 0)
@@ -110,13 +102,11 @@ pub fn draw(cr: *c.cairo_t, width: u32, height: u32, snapshot: model.Snapshot, h
     const query_color: [3]f64 = if (snapshot.query.len > 0) .{ 0.95, 0.96, 0.98 } else .{ 0.62, 0.64, 0.68 };
     drawLabel(cr, search.x + 48, search.y + 29, 15, query, query_color[0], query_color[1], query_color[2]);
 
-    if (!has_query) {
-        return;
-    }
+    if (!has_query) return;
 
     if (snapshot.count == 0) {
-        drawLabel(cr, card.x + 34, search.y + 90, 16, "Nenhum aplicativo encontrado", 0.92, 0.93, 0.95);
-        drawLabel(cr, card.x + 34, search.y + 116, 14, "Tente outro nome, app ou ajuste do sistema.", 0.67, 0.69, 0.73);
+        drawLabel(cr, card.x + 34, search.y + 90, 16, "Nenhum resultado encontrado", 0.92, 0.93, 0.95);
+        drawLabel(cr, card.x + 34, search.y + 116, 14, "Tente outro nome, aplicativo ou ajuste do sistema.", 0.67, 0.69, 0.73);
         return;
     }
 
@@ -170,47 +160,13 @@ fn drawSearchGlyph(cr: *c.cairo_t, rect: Rect) void {
 }
 
 fn drawRoundedRect(cr: *c.cairo_t, rect: Rect, radius: f64) void {
-    const right = rect.x + rect.width;
-    const bottom = rect.y + rect.height;
-    c.cairo_new_sub_path(cr);
-    c.cairo_arc(cr, right - radius, rect.y + radius, radius, -std.math.pi / 2.0, 0);
-    c.cairo_arc(cr, right - radius, bottom - radius, radius, 0, std.math.pi / 2.0);
-    c.cairo_arc(cr, rect.x + radius, bottom - radius, radius, std.math.pi / 2.0, std.math.pi);
-    c.cairo_arc(cr, rect.x + radius, rect.y + radius, radius, std.math.pi, 3.0 * std.math.pi / 2.0);
-    c.cairo_close_path(cr);
+    chrome.drawRoundedRect(cr, rect, radius);
 }
 
 fn drawLabel(cr: *c.cairo_t, x: f64, y: f64, size: f64, text: []const u8, r: f64, g: f64, b: f64) void {
-    var text_buf: [256]u8 = undefined;
-    const c_text = toCString(&text_buf, text);
-    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_NORMAL);
-    c.cairo_set_font_size(cr, size);
-    c.cairo_set_source_rgb(cr, r, g, b);
-    c.cairo_move_to(cr, x, y);
-    c.cairo_show_text(cr, c_text.ptr);
+    chrome.drawLabel(cr, x, y, size, text, r, g, b, c.CAIRO_FONT_WEIGHT_NORMAL);
 }
 
 fn drawCenteredLabel(cr: *c.cairo_t, rect: Rect, size: f64, text: []const u8, r: f64, g: f64, b: f64) void {
-    var text_buf: [64]u8 = undefined;
-    const c_text = toCString(&text_buf, text);
-    var extents: c.cairo_text_extents_t = undefined;
-    var font_extents: c.cairo_font_extents_t = undefined;
-    c.cairo_select_font_face(cr, "Sans", c.CAIRO_FONT_SLANT_NORMAL, c.CAIRO_FONT_WEIGHT_BOLD);
-    c.cairo_set_font_size(cr, size);
-    c.cairo_text_extents(cr, c_text.ptr, &extents);
-    c.cairo_font_extents(cr, &font_extents);
-    c.cairo_set_source_rgb(cr, r, g, b);
-    c.cairo_move_to(
-        cr,
-        rect.x + (rect.width - extents.width) / 2.0 - extents.x_bearing,
-        rect.y + (rect.height - font_extents.height) / 2.0 + font_extents.ascent,
-    );
-    c.cairo_show_text(cr, c_text.ptr);
-}
-
-fn toCString(buffer: []u8, text: []const u8) [:0]u8 {
-    const max_len = @min(text.len, buffer.len - 1);
-    @memcpy(buffer[0..max_len], text[0..max_len]);
-    buffer[max_len] = 0;
-    return buffer[0..max_len :0];
+    chrome.drawCenteredLabel(cr, rect, size, text, r, g, b);
 }
