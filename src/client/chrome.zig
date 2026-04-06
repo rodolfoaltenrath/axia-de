@@ -23,6 +23,12 @@ pub const HoveredControl = enum {
     close,
 };
 
+const WindowControlKind = enum {
+    minimize,
+    maximize,
+    close,
+};
+
 pub const TitlebarStyle = struct {
     title: []const u8,
     accent_glyph: []const u8 = "",
@@ -104,7 +110,7 @@ pub fn drawWindowShell(cr: *c.cairo_t, width: u32, height: u32, style: TitlebarS
     c.cairo_stroke(cr);
 
     const bar = titlebarRect(width, height);
-    c.cairo_rectangle(cr, bar.x, bar.y, bar.width, bar.height);
+    drawTopRoundedRect(cr, bar, window_radius - 1.0);
     c.cairo_set_source_rgba(cr, 0.11, 0.11, 0.115, 1.0);
     c.cairo_fill(cr);
 
@@ -117,18 +123,21 @@ pub fn drawWindowShell(cr: *c.cairo_t, width: u32, height: u32, style: TitlebarS
     }
     drawLabel(cr, style.title_x, 30, 15, style.title, 0.96, 0.97, 0.99, c.CAIRO_FONT_WEIGHT_BOLD);
 
-    drawWindowControl(cr, minimizeRect(width), "–", hovered == .minimize);
-    drawWindowControl(cr, maximizeRect(width), "□", hovered == .maximize);
-    drawWindowControl(cr, closeRect(width), "×", hovered == .close);
+    drawWindowControl(cr, minimizeRect(width), .minimize, hovered == .minimize);
+    drawWindowControl(cr, maximizeRect(width), .maximize, hovered == .maximize);
+    drawWindowControl(cr, closeRect(width), .close, hovered == .close);
 }
 
-pub fn drawWindowControl(cr: *c.cairo_t, rect: Rect, glyph: []const u8, hovered: bool) void {
+pub fn drawWindowControl(cr: *c.cairo_t, rect: Rect, kind: WindowControlKind, hovered: bool) void {
     if (hovered) {
-        drawRoundedRect(cr, .{ .x = rect.x - 4, .y = rect.y - 3, .width = rect.width + 8, .height = rect.height + 6 }, 8);
-        c.cairo_set_source_rgba(cr, 1, 1, 1, 0.07);
-        c.cairo_fill(cr);
+        drawRoundedRect(cr, .{ .x = rect.x - 5, .y = rect.y - 4, .width = rect.width + 10, .height = rect.height + 8 }, 8);
+        c.cairo_set_source_rgba(cr, if (kind == .close) 0.84 else 1.0, if (kind == .close) 0.30 else 1.0, if (kind == .close) 0.36 else 1.0, if (kind == .close) 0.14 else 0.065);
+        c.cairo_fill_preserve(cr);
+        c.cairo_set_line_width(cr, 1);
+        c.cairo_set_source_rgba(cr, if (kind == .close) 0.96 else 1.0, if (kind == .close) 0.42 else 1.0, if (kind == .close) 0.48 else 1.0, if (kind == .close) 0.20 else 0.055);
+        c.cairo_stroke(cr);
     }
-    drawCenteredLabel(cr, rect, 15, glyph, 0.88, 0.90, 0.94);
+    drawControlIcon(cr, rect, kind, hovered);
 }
 
 pub fn drawAccentGlyph(cr: *c.cairo_t, rect: Rect, glyph: []const u8, color: [3]f64) void {
@@ -147,6 +156,55 @@ pub fn drawRoundedRect(cr: *c.cairo_t, rect: Rect, radius: f64) void {
     c.cairo_arc(cr, rect.x + radius, bottom - radius, radius, std.math.pi / 2.0, std.math.pi);
     c.cairo_arc(cr, rect.x + radius, rect.y + radius, radius, std.math.pi, 3.0 * std.math.pi / 2.0);
     c.cairo_close_path(cr);
+}
+
+pub fn drawTopRoundedRect(cr: *c.cairo_t, rect: Rect, radius: f64) void {
+    const right = rect.x + rect.width;
+    const bottom = rect.y + rect.height;
+    c.cairo_new_sub_path(cr);
+    c.cairo_arc(cr, right - radius, rect.y + radius, radius, -std.math.pi / 2.0, 0);
+    c.cairo_line_to(cr, right, bottom);
+    c.cairo_line_to(cr, rect.x, bottom);
+    c.cairo_line_to(cr, rect.x, rect.y + radius);
+    c.cairo_arc(cr, rect.x + radius, rect.y + radius, radius, std.math.pi, 3.0 * std.math.pi / 2.0);
+    c.cairo_close_path(cr);
+}
+
+fn drawControlIcon(cr: *c.cairo_t, rect: Rect, kind: WindowControlKind, hovered: bool) void {
+    c.cairo_save(cr);
+    defer c.cairo_restore(cr);
+
+    c.cairo_set_line_width(cr, if (kind == .minimize) 1.8 else 1.55);
+    c.cairo_set_line_cap(cr, c.CAIRO_LINE_CAP_ROUND);
+    c.cairo_set_line_join(cr, c.CAIRO_LINE_JOIN_ROUND);
+    c.cairo_set_source_rgba(
+        cr,
+        if (kind == .close and hovered) 0.99 else 0.88,
+        if (kind == .close and hovered) 0.94 else 0.90,
+        if (kind == .close and hovered) 0.96 else 0.94,
+        0.98,
+    );
+
+    const cx = rect.x + rect.width / 2.0;
+    const cy = rect.y + rect.height / 2.0;
+    switch (kind) {
+        .minimize => {
+            c.cairo_move_to(cr, cx - 4.5, cy + 3.0);
+            c.cairo_line_to(cr, cx + 4.5, cy + 3.0);
+            c.cairo_stroke(cr);
+        },
+        .maximize => {
+            drawRoundedRect(cr, .{ .x = cx - 4.7, .y = cy - 4.2, .width = 9.4, .height = 8.4 }, 2.3);
+            c.cairo_stroke(cr);
+        },
+        .close => {
+            c.cairo_move_to(cr, cx - 4.0, cy - 4.0);
+            c.cairo_line_to(cr, cx + 4.0, cy + 4.0);
+            c.cairo_move_to(cr, cx + 4.0, cy - 4.0);
+            c.cairo_line_to(cr, cx - 4.0, cy + 4.0);
+            c.cairo_stroke(cr);
+        },
+    }
 }
 
 pub fn drawLabel(cr: *c.cairo_t, x: f64, y: f64, size: f64, text: []const u8, r: f64, g: f64, b: f64, weight: u32) void {

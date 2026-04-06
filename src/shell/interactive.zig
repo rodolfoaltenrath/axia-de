@@ -43,6 +43,10 @@ pub const InteractiveState = struct {
         return self.forward_button_events;
     }
 
+    pub fn moving(self: *const InteractiveState) bool {
+        return self.mode == .move and self.view != null;
+    }
+
     fn beginMoveWithMode(self: *InteractiveState, view: *View, lx: f64, ly: f64, forward_button_events: bool) void {
         self.finish();
         self.mode = .move;

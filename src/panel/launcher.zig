@@ -1,12 +1,10 @@
 const c = @import("wl.zig").c;
-const catalog = @import("apps_catalog");
+const runtime_catalog = @import("runtime_catalog");
 const Rect = @import("render.zig").Rect;
 
 pub const popup_width: u32 = 280;
 pub const popup_height: u32 = 182;
 const row_height: f64 = 44;
-
-pub const entries = catalog.entries;
 
 pub fn itemRect(index: usize) Rect {
     return .{
@@ -17,14 +15,14 @@ pub fn itemRect(index: usize) Rect {
     };
 }
 
-pub fn hitTest(x: f64, y: f64) ?usize {
+pub fn hitTest(entries: []const runtime_catalog.AppEntry, x: f64, y: f64) ?usize {
     for (entries, 0..) |_, index| {
         if (itemRect(index).contains(x, y)) return index;
     }
     return null;
 }
 
-pub fn drawPopup(cr: *c.cairo_t, width: u32, height: u32) void {
+pub fn drawPopup(cr: *c.cairo_t, width: u32, height: u32, entries: []const runtime_catalog.AppEntry) void {
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
 

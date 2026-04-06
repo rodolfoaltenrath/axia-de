@@ -1,6 +1,8 @@
 const std = @import("std");
 const c = @import("wl.zig").c;
-const catalog = @import("apps_catalog");
+const dock_icons = @import("icons.zig");
+const dock_ipc = @import("ipc.zig");
+const runtime_catalog = @import("runtime_catalog");
 
 pub const Rect = struct {
     x: f64,
@@ -13,16 +15,17 @@ pub const Rect = struct {
     }
 };
 
-pub const surface_height: u32 = 74;
+pub const surface_height: u32 = 66;
 
-const item_size: f64 = 44;
-const item_gap: f64 = 10;
+const item_size: f64 = 40;
+const item_gap: f64 = 6;
 const dock_padding_x: f64 = 14;
-const dock_padding_y: f64 = 8;
+const dock_padding_y: f64 = 6;
 
-pub fn containerRect(width: u32, height: u32) Rect {
-    const total_items_width = @as(f64, @floatFromInt(catalog.entries.len)) * item_size;
-    const total_gap_width = @as(f64, @floatFromInt(@max(catalog.entries.len, 1) - 1)) * item_gap;
+pub fn containerRect(width: u32, height: u32, entries: []const runtime_catalog.AppEntry) Rect {
+    const count = @max(entries.len, 1);
+    const total_items_width = @as(f64, @floatFromInt(entries.len)) * item_size;
+    const total_gap_width = @as(f64, @floatFromInt(count - 1)) * item_gap;
     const dock_width = dock_padding_x * 2.0 + total_items_width + total_gap_width;
     const dock_height = item_size + dock_padding_y * 2.0;
     return .{
@@ -33,8 +36,8 @@ pub fn containerRect(width: u32, height: u32) Rect {
     };
 }
 
-pub fn itemRect(width: u32, height: u32, index: usize) Rect {
-    const container = containerRect(width, height);
+pub fn itemRect(width: u32, height: u32, entries: []const runtime_catalog.AppEntry, index: usize) Rect {
+    const container = containerRect(width, height, entries);
     return .{
         .x = container.x + dock_padding_x + @as(f64, @floatFromInt(index)) * (item_size + item_gap),
         .y = container.y + dock_padding_y,
@@ -43,14 +46,22 @@ pub fn itemRect(width: u32, height: u32, index: usize) Rect {
     };
 }
 
-pub fn hitTest(width: u32, height: u32, x: f64, y: f64) ?usize {
-    for (catalog.entries, 0..) |_, index| {
-        if (itemRect(width, height, index).contains(x, y)) return index;
+pub fn hitTest(width: u32, height: u32, x: f64, y: f64, entries: []const runtime_catalog.AppEntry) ?usize {
+    for (entries, 0..) |_, index| {
+        if (itemRect(width, height, entries, index).contains(x, y)) return index;
     }
     return null;
 }
 
-pub fn drawDock(cr: *c.cairo_t, width: u32, height: u32, hovered_index: ?usize) void {
+pub fn drawDock(
+    cr: *c.cairo_t,
+    width: u32,
+    height: u32,
+    entries: []const runtime_catalog.AppEntry,
+    open_apps: []const dock_ipc.OpenAppInfo,
+    icons: *const dock_icons.IconCache,
+    hovered_index: ?usize,
+) void {
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
 
@@ -59,7 +70,7 @@ pub fn drawDock(cr: *c.cairo_t, width: u32, height: u32, hovered_index: ?usize) 
     c.cairo_paint(cr);
     c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
 
-    const container = containerRect(width, height);
+    const container = containerRect(width, height, entries);
     const shadow_rect = Rect{
         .x = container.x,
         .y = container.y + 6,
@@ -85,11 +96,20 @@ pub fn drawDock(cr: *c.cairo_t, width: u32, height: u32, hovered_index: ?usize) 
     c.cairo_set_source_rgba(cr, 0.55, 0.84, 0.98, 0.18);
     c.cairo_fill(cr);
 
-    for (catalog.entries, 0..) |entry, index| {
-        const rect = itemRect(width, height, index);
+    for (entries, 0..) |entry, index| {
+        const rect = itemRect(width, height, entries, index);
         const hovered = hovered_index != null and hovered_index.? == index;
+        const open_app = if (index < open_apps.len) open_apps[index] else dock_ipc.OpenAppInfo{};
         _ = entry.accent;
-        drawDockItem(cr, rect, entry.monogram, hovered, hovered_index, index);
+        drawDockItem(
+            cr,
+            rect,
+            entry.monogram,
+            icons.surfaceFor(index),
+            hovered,
+            open_app.id_len > 0,
+            open_app.focused,
+        );
     }
 }
 
@@ -97,67 +117,103 @@ fn drawDockItem(
     cr: *c.cairo_t,
     rect: Rect,
     monogram: []const u8,
+    icon_surface: ?*c.cairo_surface_t,
     hovered: bool,
-    hovered_index: ?usize,
-    index: usize,
+    is_open: bool,
+    is_focused: bool,
 ) void {
-    const is_neighbor = hovered_index != null and
-        (hovered_index.? + 1 == index or (hovered_index.? > 0 and hovered_index.? - 1 == index));
-
-    if (hovered) {
-        const hover_rect = Rect{
-            .x = rect.x - 1,
-            .y = rect.y - 1,
-            .width = rect.width + 2,
-            .height = rect.height + 2,
-        };
-        drawHoverCapsule(cr, hover_rect);
+    if (hovered or is_focused) {
+        drawHoverButton(cr, .{
+            .x = rect.x + 2.0,
+            .y = rect.y + 1.5,
+            .width = rect.width - 4.0,
+            .height = rect.height - 3.0,
+        }, hovered, is_focused);
     }
 
-    const tile_size: f64 = if (hovered)
-        40.0
-    else if (is_neighbor)
-        36.0
-    else
-        32.0;
-    const hover_lift: f64 = if (hovered) 2.0 else 0.0;
+    const tile_size: f64 = 30.0;
     const tile_rect = Rect{
         .x = rect.x + (rect.width - tile_size) / 2.0,
-        .y = rect.y + (rect.height - tile_size) / 2.0 - hover_lift,
+        .y = rect.y + (rect.height - tile_size) / 2.0,
         .width = tile_size,
         .height = tile_size,
     };
+
+    if (icon_surface) |surface| {
+        drawDockIcon(cr, tile_rect, surface, if (hovered or is_focused) 1.0 else 0.94);
+        drawOpenIndicator(cr, rect, is_open, is_focused);
+        return;
+    }
 
     drawCenteredLabel(
         cr,
         tile_rect,
         if (monogram.len > 1) 14 else 18,
         monogram,
-        if (hovered) 1.0 else if (is_neighbor) 0.97 else 0.94,
-        if (hovered) 1.0 else if (is_neighbor) 0.98 else 0.95,
-        if (hovered) 1.0 else if (is_neighbor) 0.99 else 0.96,
+        if (hovered or is_focused) 1.0 else 0.94,
+        if (hovered or is_focused) 1.0 else 0.95,
+        if (hovered or is_focused) 1.0 else 0.96,
     );
+    drawOpenIndicator(cr, rect, is_open, is_focused);
 }
 
-fn drawHoverCapsule(cr: *c.cairo_t, rect: Rect) void {
-    drawRoundedRect(cr, rect, 12);
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.09);
-    c.cairo_fill_preserve(cr);
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.055);
-    c.cairo_set_line_width(cr, 1);
-    c.cairo_stroke(cr);
+fn drawDockIcon(cr: *c.cairo_t, rect: Rect, surface: *c.cairo_surface_t, alpha: f64) void {
+    const src_w = @as(f64, @floatFromInt(c.cairo_image_surface_get_width(surface)));
+    const src_h = @as(f64, @floatFromInt(c.cairo_image_surface_get_height(surface)));
+    if (src_w <= 0 or src_h <= 0) return;
 
-    drawRoundedRect(
-        cr,
-        .{
-            .x = rect.x + 1,
-            .y = rect.y + 1,
-            .width = rect.width - 2,
-            .height = rect.height * 0.44,
-        },
-        11,
-    );
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.034);
+    const scale = @min(rect.width / src_w, rect.height / src_h);
+    const dest_w = src_w * scale;
+    const dest_h = src_h * scale;
+    const dest_x = rect.x + (rect.width - dest_w) / 2.0;
+    const dest_y = rect.y + (rect.height - dest_h) / 2.0;
+
+    c.cairo_save(cr);
+    defer c.cairo_restore(cr);
+
+    c.cairo_translate(cr, dest_x, dest_y);
+    c.cairo_scale(cr, scale, scale);
+    _ = c.cairo_set_source_surface(cr, surface, 0, 0);
+    c.cairo_paint_with_alpha(cr, alpha);
+}
+
+fn drawHoverButton(cr: *c.cairo_t, rect: Rect, hovered: bool, is_focused: bool) void {
+    drawRoundedRect(cr, rect, 8);
+    if (is_focused and !hovered) {
+        c.cairo_set_source_rgba(cr, 0.34, 0.23, 0.62, 0.17);
+    } else {
+        c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.045);
+    }
+    c.cairo_fill_preserve(cr);
+    c.cairo_set_line_width(cr, 1);
+    if (is_focused) {
+        c.cairo_set_source_rgba(cr, 0.64, 0.49, 0.98, 0.18);
+    } else {
+        c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.05);
+    }
+    c.cairo_stroke(cr);
+}
+
+fn drawOpenIndicator(cr: *c.cairo_t, rect: Rect, is_open: bool, is_focused: bool) void {
+    if (!is_open) return;
+
+    if (is_focused) {
+        c.cairo_arc(cr, rect.x + rect.width / 2.0, rect.y + rect.height - 4.8, 2.2, 0, std.math.tau);
+        c.cairo_set_source_rgba(cr, 0.67, 0.49, 0.98, 0.98);
+        c.cairo_fill(cr);
+        return;
+    }
+
+    const line_width = rect.width - 14.0;
+    const line_height = 3.0;
+    const line_rect = Rect{
+        .x = rect.x + (rect.width - line_width) / 2.0,
+        .y = rect.y + rect.height - 5.6,
+        .width = line_width,
+        .height = line_height,
+    };
+    drawRoundedRect(cr, line_rect, 1.5);
+    c.cairo_set_source_rgba(cr, 0.67, 0.49, 0.98, 0.64);
     c.cairo_fill(cr);
 }
 

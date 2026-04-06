@@ -10,7 +10,7 @@ pub const DockProcess = struct {
         return .{ .allocator = allocator };
     }
 
-    pub fn spawn(self: *DockProcess, socket_name: [*c]const u8) void {
+    pub fn spawn(self: *DockProcess, socket_name: [*c]const u8, ipc_socket_path: []const u8) void {
         if (self.child != null) return;
 
         const exe_dir = std.fs.selfExeDirPathAlloc(self.allocator) catch |err| {
@@ -58,6 +58,10 @@ pub const DockProcess = struct {
         };
         env_map.put("AXIA_BIN_DIR", exe_dir) catch |err| {
             log.err("failed to set AXIA_BIN_DIR for dock: {}", .{err});
+            return;
+        };
+        env_map.put("AXIA_IPC_SOCKET", ipc_socket_path) catch |err| {
+            log.err("failed to set AXIA_IPC_SOCKET for dock: {}", .{err});
             return;
         };
 

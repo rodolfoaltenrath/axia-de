@@ -57,6 +57,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const runtime_catalog_module = b.createModule(.{
+        .root_source_file = b.path("src/apps/runtime_catalog.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    runtime_catalog_module.addImport("apps_catalog", apps_catalog_module);
     const client_wl_module = b.createModule(.{
         .root_source_file = b.path("src/client/wl.zig"),
         .target = target,
@@ -100,6 +106,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const launcher_state_module = b.createModule(.{
+        .root_source_file = b.path("src/config/launcher_state.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    launcher_state_module.addImport("runtime_catalog", runtime_catalog_module);
 
     const exe = b.addExecutable(.{
         .name = "axia-de",
@@ -141,6 +153,8 @@ pub fn build(b: *std.Build) void {
 
     panel_exe.linkLibC();
     panel_exe.root_module.addImport("apps_catalog", apps_catalog_module);
+    panel_exe.root_module.addImport("runtime_catalog", runtime_catalog_module);
+    panel_exe.root_module.addImport("launcher_state", launcher_state_module);
     panel_exe.root_module.addImport("axia_prefs", prefs_module);
     panel_exe.root_module.addImport("settings_model", settings_model_module);
     panel_exe.step.dependOn(&gen_xdg_shell_client_header.step);
@@ -171,6 +185,8 @@ pub fn build(b: *std.Build) void {
 
     dock_exe.linkLibC();
     dock_exe.root_module.addImport("apps_catalog", apps_catalog_module);
+    dock_exe.root_module.addImport("runtime_catalog", runtime_catalog_module);
+    dock_exe.root_module.addImport("launcher_state", launcher_state_module);
     dock_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     dock_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     dock_exe.step.dependOn(&gen_layer_shell_client_header.step);
@@ -198,6 +214,8 @@ pub fn build(b: *std.Build) void {
     });
     launcher_app_exe.linkLibC();
     launcher_app_exe.root_module.addImport("apps_catalog", apps_catalog_module);
+    launcher_app_exe.root_module.addImport("runtime_catalog", runtime_catalog_module);
+    launcher_app_exe.root_module.addImport("launcher_state", launcher_state_module);
     launcher_app_exe.root_module.addImport("client_wl", client_wl_module);
     launcher_app_exe.root_module.addImport("client_buffer", client_buffer_module);
     launcher_app_exe.root_module.addImport("client_chrome", client_chrome_module);

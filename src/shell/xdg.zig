@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("../wl.zig").c;
 const ipc = @import("../ipc/server.zig");
+const settings_model = @import("../settings/model.zig");
 const InteractiveState = @import("interactive.zig").InteractiveState;
 const View = @import("view.zig").View;
 const WorkspaceState = @import("workspace.zig").WorkspaceState;
@@ -19,6 +20,7 @@ pub const XdgManager = struct {
     primary_output: ?[*c]c.struct_wlr_output = null,
     usable_area: c.struct_wlr_box = std.mem.zeroes(c.struct_wlr_box),
     window_root: [*c]c.struct_wlr_scene_tree,
+    overlay_root: [*c]c.struct_wlr_scene_tree,
     shell: [*c]c.struct_wlr_xdg_shell,
     views: std.ArrayListUnmanaged(*View) = .empty,
     focused_view: ?*View = null,
@@ -29,6 +31,9 @@ pub const XdgManager = struct {
     cursor_ly: f64 = 0,
     next_x: i32 = 48,
     next_y: i32 = 48,
+    preview_tree: ?[*c]c.struct_wlr_scene_tree = null,
+    snap_preview_tree: ?[*c]c.struct_wlr_scene_tree = null,
+    snap_target: SnapTarget = .none,
     new_toplevel: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
     listeners_ready: bool = false,
 
@@ -37,6 +42,7 @@ pub const XdgManager = struct {
         seat: [*c]c.struct_wlr_seat,
         output_layout: [*c]c.struct_wlr_output_layout,
         window_root: [*c]c.struct_wlr_scene_tree,
+        overlay_root: [*c]c.struct_wlr_scene_tree,
         display: *c.struct_wl_display,
     ) !XdgManager {
         const shell = c.wlr_xdg_shell_create(display, 6);
@@ -47,6 +53,7 @@ pub const XdgManager = struct {
             .seat = seat,
             .output_layout = output_layout,
             .window_root = window_root,
+            .overlay_root = overlay_root,
             .shell = shell,
         };
     }
@@ -127,6 +134,116 @@ pub const XdgManager = struct {
         return snapshot;
     }
 
+    pub fn populateRuntimeApps(self: *const XdgManager, runtime: *settings_model.RuntimeState) void {
+        for (self.views.items) |view| {
+            if (!view.mappedState()) continue;
+
+            const app_id = view.appId();
+            if (app_id.len == 0) continue;
+
+            if (findRuntimeApp(runtime, app_id)) |existing_index| {
+                var existing = &runtime.apps[existing_index];
+                if (self.focused_view == view) existing.focused = true;
+                if (existing.title_len == 0 or self.focused_view == view) {
+                    existing.title_len = copyText(&existing.title, view.title());
+                }
+                continue;
+            }
+
+            if (runtime.app_count >= runtime.apps.len) break;
+            const app = &runtime.apps[runtime.app_count];
+            app.id_len = copyText(&app.id, app_id);
+            app.title_len = copyText(&app.title, view.title());
+            app.focused = self.focused_view == view;
+            runtime.app_count += 1;
+        }
+    }
+
+    pub fn focusAppById(self: *XdgManager, app_id: []const u8) bool {
+        if (app_id.len == 0) return false;
+
+        var index = self.views.items.len;
+        while (index > 0) {
+            index -= 1;
+            const view = self.views.items[index];
+            if (!view.mappedState()) continue;
+            if (!std.mem.eql(u8, view.appId(), app_id)) continue;
+            self.focusView(view);
+            return true;
+        }
+
+        return false;
+    }
+
+    pub fn showAppPreview(self: *XdgManager, app_id: []const u8, anchor_x: i32) !void {
+        const view = self.findPreviewView(app_id) orelse {
+            self.hideAppPreview();
+            return;
+        };
+
+        self.hideAppPreview();
+
+        const preview_max_width: i32 = 320;
+        const preview_max_height: i32 = 200;
+        const preview_padding: i32 = 10;
+        const width = @max(view.effectiveWidth(), 1);
+        const height = @max(view.effectiveHeight(), 1);
+        const scale = @min(
+            1.0,
+            @min(
+                @as(f64, @floatFromInt(preview_max_width)) / @as(f64, @floatFromInt(width)),
+                @as(f64, @floatFromInt(preview_max_height)) / @as(f64, @floatFromInt(height)),
+            ),
+        );
+        const scaled_width: i32 = @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(width)) * scale))));
+        const scaled_height: i32 = @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(height)) * scale))));
+        const outer_width = scaled_width + preview_padding * 2;
+        const outer_height = scaled_height + preview_padding * 2;
+
+        const tree = c.wlr_scene_tree_create(self.overlay_root) orelse return error.PreviewTreeCreateFailed;
+        errdefer c.wlr_scene_node_destroy(&tree.*.node);
+
+        const background_color = [4]f32{ 0.09, 0.10, 0.12, 0.96 };
+        _ = c.wlr_scene_rect_create(tree, outer_width, outer_height, &background_color) orelse return error.PreviewRectCreateFailed;
+
+        if (view.workspaceIndex() == self.workspaces.current and !view.isMinimized()) {
+            const content_tree = c.wlr_scene_subsurface_tree_create(tree, view.xdg_surface.*.surface) orelse return error.PreviewSurfaceCreateFailed;
+            c.wlr_scene_node_set_position(&content_tree.*.node, preview_padding, preview_padding);
+
+            var clip = c.struct_wlr_box{
+                .x = 0,
+                .y = 0,
+                .width = width,
+                .height = height,
+            };
+            c.wlr_scene_subsurface_tree_set_clip(&content_tree.*.node, &clip);
+            scaleSceneTree(content_tree, scale);
+        } else {
+            const content_tree = c.wlr_scene_tree_create(tree) orelse return error.PreviewSurfaceCreateFailed;
+            try self.snapshotPreviewBuffers(content_tree, view, scale, preview_padding);
+        }
+
+        const output_area = self.outputArea();
+        const margin: i32 = 16;
+        const x = std.math.clamp(
+            anchor_x - @divTrunc(outer_width, 2),
+            output_area.x + margin,
+            output_area.x + output_area.width - outer_width - margin,
+        );
+        const y = output_area.y + output_area.height - outer_height - 92;
+        c.wlr_scene_node_set_position(&tree.*.node, x, y);
+        c.wlr_scene_node_raise_to_top(&tree.*.node);
+
+        self.preview_tree = tree;
+    }
+
+    pub fn hideAppPreview(self: *XdgManager) void {
+        if (self.preview_tree) |tree| {
+            c.wlr_scene_node_destroy(&tree.*.node);
+            self.preview_tree = null;
+        }
+    }
+
     pub fn setupListeners(self: *XdgManager) void {
         self.new_toplevel.notify = handleNewToplevel;
         c.wl_signal_add(&self.shell.*.events.new_toplevel, &self.new_toplevel);
@@ -134,6 +251,8 @@ pub const XdgManager = struct {
     }
 
     pub fn deinit(self: *XdgManager) void {
+        self.hideAppPreview();
+        self.hideSnapPreview();
         if (self.listeners_ready) {
             c.wl_list_remove(&self.new_toplevel.link);
         }
@@ -245,8 +364,11 @@ pub const XdgManager = struct {
         self.cursor_ly = ly;
 
         if (self.interactive.update(lx, ly)) {
+            self.updateSnapPreview(lx, ly);
             return;
         }
+
+        self.hideSnapPreview();
 
         if (self.hitTest(lx, ly)) |hit| {
             if (!c.wlr_seat_pointer_surface_has_focus(self.seat, hit.surface)) {
@@ -300,7 +422,9 @@ pub const XdgManager = struct {
                 _ = c.wlr_seat_pointer_notify_button(self.seat, time_msec, button, state);
             }
             if (state == c.WL_POINTER_BUTTON_STATE_RELEASED) {
+                self.applySnapIfNeeded();
                 self.interactive.finish();
+                self.hideSnapPreview();
             }
             return;
         }
@@ -340,6 +464,8 @@ pub const XdgManager = struct {
             self.activateWorkspace(view.workspaceIndex());
         }
 
+        view.restoreFromMinimized();
+
         if (self.focused_view) |focused_view| {
             if (focused_view != view) {
                 focused_view.unfocus();
@@ -366,6 +492,17 @@ pub const XdgManager = struct {
         return null;
     }
 
+    fn findPreviewView(self: *XdgManager, app_id: []const u8) ?*View {
+        var index = self.views.items.len;
+        while (index > 0) {
+            index -= 1;
+            const view = self.views.items[index];
+            if (!view.mappedState()) continue;
+            if (std.mem.eql(u8, view.appId(), app_id)) return view;
+        }
+        return null;
+    }
+
     fn syncWorkspaceVisibility(self: *XdgManager) void {
         for (self.views.items) |view| {
             view.setWorkspaceVisible(view.workspaceIndex() == self.workspaces.current);
@@ -376,6 +513,161 @@ pub const XdgManager = struct {
                 self.clearFocus();
             }
         }
+    }
+
+    const SnapTarget = enum {
+        none,
+        full,
+        top_half,
+        left_half,
+        right_half,
+        top_left,
+        top_right,
+    };
+
+    const SnapPreviewSpec = struct {
+        target: SnapTarget,
+        rect: c.struct_wlr_box,
+    };
+
+    fn updateSnapPreview(self: *XdgManager, lx: f64, ly: f64) void {
+        if (!self.interactive.moving()) {
+            self.hideSnapPreview();
+            return;
+        }
+
+        const spec = self.snapSpecAt(lx, ly) orelse {
+            self.hideSnapPreview();
+            return;
+        };
+
+        if (self.snap_target == spec.target and self.snap_preview_tree != null) return;
+        self.showSnapPreview(spec) catch {};
+    }
+
+    fn snapSpecAt(self: *const XdgManager, lx: f64, ly: f64) ?SnapPreviewSpec {
+        const area = self.usable_area;
+        if (area.width <= 0 or area.height <= 0) return null;
+
+        const top_hard_zone = @as(f64, @floatFromInt(area.y)) + 8.0;
+        const top_soft_zone = @as(f64, @floatFromInt(area.y)) + 60.0;
+        const side_zone = 18.0;
+        const left_edge = @as(f64, @floatFromInt(area.x));
+        const right_edge = @as(f64, @floatFromInt(area.x + area.width));
+
+        if (ly <= top_hard_zone) {
+            return .{ .target = .full, .rect = area };
+        }
+
+        if (ly <= top_soft_zone) {
+            if (lx <= left_edge + side_zone) {
+                return .{ .target = .top_left, .rect = snapRect(area, .top_left) };
+            }
+            if (lx >= right_edge - side_zone) {
+                return .{ .target = .top_right, .rect = snapRect(area, .top_right) };
+            }
+            return .{ .target = .top_half, .rect = snapRect(area, .top_half) };
+        }
+
+        if (lx <= left_edge + side_zone) {
+            return .{ .target = .left_half, .rect = snapRect(area, .left_half) };
+        }
+        if (lx >= right_edge - side_zone) {
+            return .{ .target = .right_half, .rect = snapRect(area, .right_half) };
+        }
+
+        return null;
+    }
+
+    fn snapRect(area: c.struct_wlr_box, target: SnapTarget) c.struct_wlr_box {
+        const half_width = @divTrunc(area.width, 2);
+        const half_height = @divTrunc(area.height, 2);
+        return switch (target) {
+            .none => area,
+            .full => area,
+            .top_half => .{
+                .x = area.x,
+                .y = area.y,
+                .width = area.width,
+                .height = half_height,
+            },
+            .left_half => .{
+                .x = area.x,
+                .y = area.y,
+                .width = half_width,
+                .height = area.height,
+            },
+            .right_half => .{
+                .x = area.x + half_width,
+                .y = area.y,
+                .width = area.width - half_width,
+                .height = area.height,
+            },
+            .top_left => .{
+                .x = area.x,
+                .y = area.y,
+                .width = half_width,
+                .height = half_height,
+            },
+            .top_right => .{
+                .x = area.x + half_width,
+                .y = area.y,
+                .width = area.width - half_width,
+                .height = half_height,
+            },
+        };
+    }
+
+    fn showSnapPreview(self: *XdgManager, spec: SnapPreviewSpec) !void {
+        self.hideSnapPreview();
+
+        const tree = c.wlr_scene_tree_create(self.overlay_root) orelse return;
+        errdefer c.wlr_scene_node_destroy(&tree.*.node);
+
+        const fill_color = [4]f32{ 0.24, 0.62, 0.90, 0.18 };
+        const border_color = [4]f32{ 0.40, 0.88, 0.98, 0.82 };
+        const border: i32 = 2;
+
+        c.wlr_scene_node_set_position(&tree.*.node, spec.rect.x, spec.rect.y);
+        _ = c.wlr_scene_rect_create(tree, spec.rect.width, spec.rect.height, &fill_color) orelse return;
+        _ = c.wlr_scene_rect_create(tree, spec.rect.width, border, &border_color) orelse return;
+        const bottom = c.wlr_scene_rect_create(tree, spec.rect.width, border, &border_color) orelse return;
+        c.wlr_scene_node_set_position(&bottom.*.node, 0, spec.rect.height - border);
+        const left = c.wlr_scene_rect_create(tree, border, spec.rect.height, &border_color) orelse return;
+        c.wlr_scene_node_set_position(&left.*.node, 0, 0);
+        const right = c.wlr_scene_rect_create(tree, border, spec.rect.height, &border_color) orelse return;
+        c.wlr_scene_node_set_position(&right.*.node, spec.rect.width - border, 0);
+        c.wlr_scene_node_raise_to_top(&tree.*.node);
+
+        self.snap_preview_tree = tree;
+        self.snap_target = spec.target;
+    }
+
+    fn hideSnapPreview(self: *XdgManager) void {
+        if (self.snap_preview_tree) |tree| {
+            c.wlr_scene_node_destroy(&tree.*.node);
+            self.snap_preview_tree = null;
+        }
+        self.snap_target = .none;
+    }
+
+    fn applySnapIfNeeded(self: *XdgManager) void {
+        if (self.snap_target == .none) return;
+        const view = self.interactive.view orelse return;
+        const rect = snapRect(self.usable_area, self.snap_target);
+        view.applyTiledRect(rect, snapEdges(self.snap_target));
+    }
+
+    fn snapEdges(target: SnapTarget) u32 {
+        return switch (target) {
+            .none => 0,
+            .full => c.WLR_EDGE_TOP | c.WLR_EDGE_BOTTOM | c.WLR_EDGE_LEFT | c.WLR_EDGE_RIGHT,
+            .top_half => c.WLR_EDGE_TOP | c.WLR_EDGE_LEFT | c.WLR_EDGE_RIGHT,
+            .left_half => c.WLR_EDGE_TOP | c.WLR_EDGE_BOTTOM | c.WLR_EDGE_LEFT,
+            .right_half => c.WLR_EDGE_TOP | c.WLR_EDGE_BOTTOM | c.WLR_EDGE_RIGHT,
+            .top_left => c.WLR_EDGE_TOP | c.WLR_EDGE_LEFT,
+            .top_right => c.WLR_EDGE_TOP | c.WLR_EDGE_RIGHT,
+        };
     }
 
     const Hit = struct {
@@ -531,5 +823,95 @@ pub const XdgManager = struct {
             out += 1;
         }
         return out;
+    }
+
+    fn copyText(dest: []u8, src: []const u8) usize {
+        const len = @min(dest.len, src.len);
+        @memcpy(dest[0..len], src[0..len]);
+        return len;
+    }
+
+    fn findRuntimeApp(runtime: *const settings_model.RuntimeState, app_id: []const u8) ?usize {
+        for (0..runtime.app_count) |index| {
+            if (std.mem.eql(u8, runtime.apps[index].idText(), app_id)) return index;
+        }
+        return null;
+    }
+
+    fn snapshotPreviewBuffers(self: *XdgManager, target: [*c]c.struct_wlr_scene_tree, view: *View, scale: f64, padding: i32) !void {
+        _ = self;
+        const source_tree = view.scene_tree orelse return;
+        const node = &source_tree.*.node;
+        const was_enabled = node.*.enabled;
+        if (!was_enabled) {
+            c.wlr_scene_node_set_enabled(node, true);
+        }
+        defer if (!was_enabled) c.wlr_scene_node_set_enabled(node, false);
+
+        var context = PreviewCloneContext{
+            .target = target,
+            .origin_x = view.x,
+            .origin_y = view.y,
+            .scale = scale,
+            .padding = padding,
+        };
+        c.wlr_scene_node_for_each_buffer(node, clonePreviewBuffer, &context);
+    }
+
+    const PreviewCloneContext = struct {
+        target: [*c]c.struct_wlr_scene_tree,
+        origin_x: i32,
+        origin_y: i32,
+        scale: f64,
+        padding: i32,
+    };
+
+    fn clonePreviewBuffer(buffer: ?*c.struct_wlr_scene_buffer, sx: c_int, sy: c_int, raw_ctx: ?*anyopaque) callconv(.c) void {
+        const scene_buffer = buffer orelse return;
+        const source = scene_buffer.*.buffer orelse return;
+        const raw_context = raw_ctx orelse return;
+        const context: *PreviewCloneContext = @ptrCast(@alignCast(raw_context));
+
+        const clone = c.wlr_scene_buffer_create(context.target, source) orelse return;
+        c.wlr_scene_node_set_position(
+            &clone.*.node,
+            context.padding + @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(sx - context.origin_x)) * context.scale))),
+            context.padding + @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(sy - context.origin_y)) * context.scale))),
+        );
+        c.wlr_scene_buffer_set_dest_size(
+            clone,
+            @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(scene_buffer.*.buffer_width)) * context.scale)))),
+            @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(scene_buffer.*.buffer_height)) * context.scale)))),
+        );
+        c.wlr_scene_buffer_set_filter_mode(clone, c.WLR_SCALE_FILTER_BILINEAR);
+    }
+
+    fn scaleSceneTree(tree: [*c]c.struct_wlr_scene_tree, scale: f64) void {
+        var link = tree.*.children.next;
+        while (link != &tree.*.children) : (link = link.*.next) {
+            const node: *c.struct_wlr_scene_node = @ptrCast(@alignCast(@as(*allowzero c.struct_wlr_scene_node, @fieldParentPtr("link", link))));
+            c.wlr_scene_node_set_position(
+                node,
+                @intFromFloat(@round(@as(f64, @floatFromInt(node.*.x)) * scale)),
+                @intFromFloat(@round(@as(f64, @floatFromInt(node.*.y)) * scale)),
+            );
+
+            switch (node.*.type) {
+                c.WLR_SCENE_NODE_TREE => {
+                    const child_tree: *c.struct_wlr_scene_tree = @ptrCast(@alignCast(@as(*allowzero c.struct_wlr_scene_tree, @fieldParentPtr("node", node))));
+                    scaleSceneTree(child_tree, scale);
+                },
+                c.WLR_SCENE_NODE_BUFFER => {
+                    const buffer: *c.struct_wlr_scene_buffer = @ptrCast(@alignCast(@as(*allowzero c.struct_wlr_scene_buffer, @fieldParentPtr("node", node))));
+                    c.wlr_scene_buffer_set_dest_size(
+                        buffer,
+                        @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(buffer.*.buffer_width)) * scale)))),
+                        @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(buffer.*.buffer_height)) * scale)))),
+                    );
+                    c.wlr_scene_buffer_set_filter_mode(buffer, c.WLR_SCALE_FILTER_BILINEAR);
+                },
+                else => {},
+            }
+        }
     }
 };

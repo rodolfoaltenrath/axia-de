@@ -12,20 +12,22 @@ pub fn visibleResultLimit(height: u32) usize {
     return @max(1, @as(usize, @intCast(@divTrunc(available, 60))));
 }
 
-pub fn cardRect(width: u32, height: u32, has_query: bool, result_count: usize) Rect {
+pub fn cardRect(width: u32, height: u32, snapshot: model.Snapshot) Rect {
     const total_width = @as(f64, @floatFromInt(width));
     const total_height = @as(f64, @floatFromInt(height));
     const card_width = @min(total_width - 56.0, 664.0);
     const top_margin = 24.0;
     const bottom_margin = 24.0;
-    const visible_results = @min(result_count, visibleResultLimit(height));
-    const desired_height = if (!has_query)
+    const visible_results = @min(snapshot.count, visibleResultLimit(height));
+    const desired_height = if (snapshot.showing_recent)
+        122.0 + @as(f64, @floatFromInt(visible_results)) * 60.0 + 24.0
+    else if (snapshot.query.len == 0)
         98.0
     else if (visible_results == 0)
         186.0
     else
         108.0 + @as(f64, @floatFromInt(visible_results)) * 60.0 + 24.0;
-    const min_height: f64 = if (!has_query) 98.0 else 214.0;
+    const min_height: f64 = if (snapshot.showing_recent or snapshot.query.len > 0) 214.0 else 98.0;
     const card_height = @min(total_height - top_margin - bottom_margin, @max(min_height, desired_height));
     return .{
         .x = (total_width - card_width) / 2.0,
@@ -35,8 +37,8 @@ pub fn cardRect(width: u32, height: u32, has_query: bool, result_count: usize) R
     };
 }
 
-pub fn searchRect(width: u32, height: u32, has_query: bool, result_count: usize) Rect {
-    const card = cardRect(width, height, has_query, result_count);
+pub fn searchRect(width: u32, height: u32, snapshot: model.Snapshot) Rect {
+    const card = cardRect(width, height, snapshot);
     return .{
         .x = card.x + 28,
         .y = card.y + 22,
@@ -45,12 +47,12 @@ pub fn searchRect(width: u32, height: u32, has_query: bool, result_count: usize)
     };
 }
 
-pub fn resultRect(width: u32, height: u32, result_count: usize, index: usize) Rect {
-    const has_query = result_count > 0;
-    const card = cardRect(width, height, has_query, result_count);
+pub fn resultRect(width: u32, height: u32, snapshot: model.Snapshot, index: usize) Rect {
+    const card = cardRect(width, height, snapshot);
+    const top_offset: f64 = if (snapshot.showing_recent) 84.0 else 58.0;
     return .{
         .x = card.x + 28,
-        .y = searchRect(width, height, has_query, result_count).y + 58.0 + @as(f64, @floatFromInt(index)) * 60.0,
+        .y = searchRect(width, height, snapshot).y + top_offset + @as(f64, @floatFromInt(index)) * 60.0,
         .width = card.width - 56,
         .height = 54,
     };
@@ -58,7 +60,14 @@ pub fn resultRect(width: u32, height: u32, result_count: usize, index: usize) Re
 
 pub fn hitTest(width: u32, height: u32, x: f64, y: f64, snapshot: model.Snapshot) ?usize {
     for (0..snapshot.count) |index| {
-        if (resultRect(width, height, snapshot.count, index).contains(x, y)) return index;
+        if (resultRect(width, height, snapshot, index).contains(x, y)) return index;
+    }
+    return null;
+}
+
+pub fn favoriteHitTest(width: u32, height: u32, x: f64, y: f64, snapshot: model.Snapshot) ?usize {
+    for (0..snapshot.count) |index| {
+        if (favoriteButtonRect(resultRect(width, height, snapshot, index)).contains(x, y)) return index;
     }
     return null;
 }
@@ -72,8 +81,7 @@ pub fn draw(cr: *c.cairo_t, width: u32, height: u32, snapshot: model.Snapshot, h
     c.cairo_paint(cr);
     c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
 
-    const has_query = snapshot.query.len > 0;
-    const card = cardRect(width, height, has_query, snapshot.count);
+    const card = cardRect(width, height, snapshot);
 
     drawRoundedRect(cr, card, 20);
     c.cairo_set_source_rgba(cr, 0.12, 0.12, 0.125, 0.965);
@@ -82,7 +90,7 @@ pub fn draw(cr: *c.cairo_t, width: u32, height: u32, snapshot: model.Snapshot, h
     c.cairo_set_line_width(cr, 1.0);
     c.cairo_stroke(cr);
 
-    const search = searchRect(width, height, has_query, snapshot.count);
+    const search = searchRect(width, height, snapshot);
     drawRoundedRect(cr, search, 10);
     c.cairo_set_source_rgba(cr, 0.10, 0.10, 0.105, 0.95);
     c.cairo_fill_preserve(cr);
@@ -102,16 +110,18 @@ pub fn draw(cr: *c.cairo_t, width: u32, height: u32, snapshot: model.Snapshot, h
     const query_color: [3]f64 = if (snapshot.query.len > 0) .{ 0.95, 0.96, 0.98 } else .{ 0.62, 0.64, 0.68 };
     drawLabel(cr, search.x + 48, search.y + 29, 15, query, query_color[0], query_color[1], query_color[2]);
 
-    if (!has_query) return;
+    if (snapshot.showing_recent) {
+        drawLabel(cr, card.x + 34, search.y + 84, 13, "Recentes", 0.66, 0.70, 0.76);
+    } else if (snapshot.query.len == 0) return;
 
-    if (snapshot.count == 0) {
+    if (snapshot.query.len > 0 and snapshot.count == 0) {
         drawLabel(cr, card.x + 34, search.y + 90, 16, "Nenhum resultado encontrado", 0.92, 0.93, 0.95);
         drawLabel(cr, card.x + 34, search.y + 116, 14, "Tente outro nome, aplicativo ou ajuste do sistema.", 0.67, 0.69, 0.73);
         return;
     }
 
     for (0..snapshot.count) |index| {
-        const rect = resultRect(width, height, snapshot.count, index);
+        const rect = resultRect(width, height, snapshot, index);
         const selected = snapshot.selected != null and snapshot.selected.? == index;
         const is_hovered = hovered != null and hovered.? == index;
         drawResultRow(cr, rect, snapshot.entries[index], selected, is_hovered);
@@ -139,10 +149,43 @@ fn drawResultRow(cr: *c.cairo_t, rect: Rect, entry: model.EntryView, selected: b
     drawLabel(cr, rect.x + 66, rect.y + 25, 15, entry.label, if (entry.enabled) 0.96 else 0.78, if (entry.enabled) 0.97 else 0.80, if (entry.enabled) 0.99 else 0.83);
     drawLabel(cr, rect.x + 66, rect.y + 44, 13, entry.subtitle, if (entry.enabled) 0.74 else 0.58, if (entry.enabled) 0.76 else 0.60, if (entry.enabled) 0.79 else 0.64);
     if (entry.enabled) {
-        drawLabel(cr, rect.x + rect.width - 72, rect.y + 25, 13, entry.shortcut, 0.78, 0.80, 0.84);
+        drawFavoriteButton(cr, favoriteButtonRect(rect), entry.favorite);
     } else {
         drawLabel(cr, rect.x + rect.width - 84, rect.y + 25, 13, "Em breve", 0.46, 0.78, 0.90);
     }
+}
+
+fn favoriteButtonRect(rect: Rect) Rect {
+    return .{
+        .x = rect.x + rect.width - 92,
+        .y = rect.y + 13,
+        .width = 76,
+        .height = 28,
+    };
+}
+
+fn drawFavoriteButton(cr: *c.cairo_t, rect: Rect, favorite: bool) void {
+    drawRoundedRect(cr, rect, 9);
+    c.cairo_set_source_rgba(
+        cr,
+        if (favorite) 0.36 else 1.0,
+        if (favorite) 0.92 else 1.0,
+        if (favorite) 1.0 else 1.0,
+        if (favorite) 0.18 else 0.06,
+    );
+    c.cairo_fill_preserve(cr);
+    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, if (favorite) 0.10 else 0.05);
+    c.cairo_set_line_width(cr, 1.0);
+    c.cairo_stroke(cr);
+    drawCenteredLabel(
+        cr,
+        rect,
+        13,
+        if (favorite) "Fixado" else "Fixar",
+        if (favorite) 0.82 else 0.90,
+        if (favorite) 0.97 else 0.92,
+        if (favorite) 1.0 else 0.95,
+    );
 }
 
 fn drawSearchGlyph(cr: *c.cairo_t, rect: Rect) void {

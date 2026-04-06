@@ -6,8 +6,10 @@ const ipc = @import("ipc.zig");
 const launcher = @import("launcher.zig");
 const render = @import("render.zig");
 const workspaces = @import("workspaces.zig");
+const launcher_state = @import("launcher_state");
 const prefs = @import("axia_prefs");
 const settings_model = @import("settings_model");
+const runtime_catalog = @import("runtime_catalog");
 
 const log = std.log.scoped(.axia_panel);
 const default_output_width: u32 = 1366;
@@ -82,6 +84,8 @@ pub const App = struct {
     launcher_popup: SurfaceState = .{ .role = .launcher_popup },
     workspace_popup: SurfaceState = .{ .role = .workspace_popup },
     workspace_state: ipc.WorkspaceState = .{},
+    catalog: runtime_catalog.Catalog,
+    launcher_entries: std.ArrayListUnmanaged(runtime_catalog.AppEntry) = .empty,
     registry_listener: c.struct_wl_registry_listener = undefined,
     seat_listener: c.struct_wl_seat_listener = undefined,
     pointer_listener: c.struct_wl_pointer_listener = undefined,
@@ -105,8 +109,12 @@ pub const App = struct {
             .allocator = allocator,
             .display = display,
             .registry = registry,
+            .catalog = runtime_catalog.Catalog.init(allocator),
         };
         app.ipc_socket_path = std.process.getEnvVarOwned(allocator, "AXIA_IPC_SOCKET") catch null;
+        try app.catalog.loadDefault();
+        try launcher_state.ensureDefaultFavorites(allocator, &app.catalog);
+        app.launcher_entries = try launcher_state.loadFavoriteEntries(allocator, &app.catalog);
         app.now = calendar.DateTime.now();
         app.displayed_minute_stamp = app.now.minuteStamp();
         app.month_cursor = .{
@@ -144,6 +152,8 @@ pub const App = struct {
         if (self.layer_shell) |layer_shell| c.zwlr_layer_shell_v1_destroy(layer_shell);
         if (self.shm) |shm| c.wl_shm_destroy(shm);
         if (self.compositor) |compositor| c.wl_compositor_destroy(compositor);
+        self.launcher_entries.deinit(self.allocator);
+        self.catalog.deinit();
         c.wl_registry_destroy(self.registry);
         c.wl_display_disconnect(self.display);
         if (self.ipc_socket_path) |socket_path| self.allocator.free(socket_path);
@@ -438,7 +448,7 @@ pub const App = struct {
             .panel => render.drawPanel(buffer.cr, surface.width, surface.height, self.now, self.panel_hovered, self.preferences),
             .dismiss_overlay => drawDismissOverlay(buffer.cr),
             .clock_popup => render.drawCalendarPopup(buffer.cr, surface.width, surface.height, self.month_cursor, self.now, self.preferences),
-            .launcher_popup => launcher.drawPopup(buffer.cr, surface.width, surface.height),
+            .launcher_popup => launcher.drawPopup(buffer.cr, surface.width, surface.height, self.launcher_entries.items),
             .workspace_popup => workspaces.drawPopup(buffer.cr, surface.width, surface.height, self.workspace_state),
         }
 
@@ -526,8 +536,12 @@ pub const App = struct {
         }
 
         if (self.pointer_role == .launcher_popup and self.launcher_popup_visible) {
-            if (launcher.hitTest(x, y)) |index| {
-                self.spawnCommand(launcher.entries[index].command) catch |err| {
+            if (launcher.hitTest(self.launcher_entries.items, x, y)) |index| {
+                if (index >= self.launcher_entries.items.len) return;
+                launcher_state.recordRecentId(self.allocator, self.launcher_entries.items[index].id) catch |err| {
+                    log.err("failed to persist panel recent app: {}", .{err});
+                };
+                self.spawnCommand(self.launcher_entries.items[index].command) catch |err| {
                     log.err("failed to launch app: {}", .{err});
                 };
                 self.toggleLauncherPopup();

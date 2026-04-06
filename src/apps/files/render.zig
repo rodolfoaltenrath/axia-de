@@ -446,7 +446,7 @@ fn drawTopGlyphButton(cr: *c.cairo_t, rect: Rect, glyph: []const u8, hovered: bo
         c.cairo_set_source_rgba(cr, 1, 1, 1, 0.06);
         c.cairo_fill(cr);
     }
-    drawCenteredLabel(cr, rect, 16, glyph, 0.39, 0.91, 1.0);
+    drawTopGlyphIcon(cr, rect, glyph);
 }
 
 fn drawToolbarButton(cr: *c.cairo_t, rect: Rect, label: []const u8, hovered: bool) void {
@@ -551,6 +551,45 @@ fn drawLabel(cr: *c.cairo_t, x: f64, y: f64, size: f64, text: []const u8, r: f64
 
 fn drawCenteredLabel(cr: *c.cairo_t, rect: Rect, size: f64, text: []const u8, r: f64, g: f64, b: f64) void {
     chrome.drawCenteredLabel(cr, rect, size, text, r, g, b);
+}
+
+fn drawTopGlyphIcon(cr: *c.cairo_t, rect: Rect, glyph: []const u8) void {
+    c.cairo_save(cr);
+    defer c.cairo_restore(cr);
+
+    c.cairo_set_source_rgb(cr, 0.39, 0.91, 1.0);
+    c.cairo_set_line_width(cr, 1.8);
+    c.cairo_set_line_cap(cr, c.CAIRO_LINE_CAP_ROUND);
+    c.cairo_set_line_join(cr, c.CAIRO_LINE_JOIN_ROUND);
+
+    const cx = rect.x + rect.width / 2.0;
+    const cy = rect.y + rect.height / 2.0;
+    if (std.mem.eql(u8, glyph, "=")) {
+        c.cairo_move_to(cr, cx - 4.0, cy - 2.5);
+        c.cairo_line_to(cr, cx + 4.0, cy - 2.5);
+        c.cairo_move_to(cr, cx - 4.0, cy + 2.5);
+        c.cairo_line_to(cr, cx + 4.0, cy + 2.5);
+        c.cairo_stroke(cr);
+        return;
+    }
+
+    if (std.mem.eql(u8, glyph, "<")) {
+        c.cairo_move_to(cr, cx + 2.5, cy - 5.0);
+        c.cairo_line_to(cr, cx - 2.5, cy);
+        c.cairo_line_to(cr, cx + 2.5, cy + 5.0);
+        c.cairo_stroke(cr);
+        return;
+    }
+
+    if (std.mem.eql(u8, glyph, ">")) {
+        c.cairo_move_to(cr, cx - 2.5, cy - 5.0);
+        c.cairo_line_to(cr, cx + 2.5, cy);
+        c.cairo_line_to(cr, cx - 2.5, cy + 5.0);
+        c.cairo_stroke(cr);
+        return;
+    }
+
+    drawCenteredLabel(cr, rect, 16, glyph, 0.39, 0.91, 1.0);
 }
 
 fn basenameLabel(current_dir: []const u8) []const u8 {

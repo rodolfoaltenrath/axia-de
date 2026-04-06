@@ -119,11 +119,29 @@ pub const DisplayInfo = struct {
     }
 };
 
+pub const AppInfo = struct {
+    id: [64]u8 = [_]u8{0} ** 64,
+    id_len: usize = 0,
+    title: [96]u8 = [_]u8{0} ** 96,
+    title_len: usize = 0,
+    focused: bool = false,
+
+    pub fn idText(self: *const AppInfo) []const u8 {
+        return self.id[0..self.id_len];
+    }
+
+    pub fn titleText(self: *const AppInfo) []const u8 {
+        return self.title[0..self.title_len];
+    }
+};
+
 pub const RuntimeState = struct {
     display_count: usize = 0,
     displays: [4]DisplayInfo = [_]DisplayInfo{.{}} ** 4,
     workspace_current: usize = 0,
     workspace_count: usize = default_workspace_count,
+    app_count: usize = 0,
+    apps: [16]AppInfo = [_]AppInfo{.{}} ** 16,
     socket_name: [64]u8 = [_]u8{0} ** 64,
     socket_name_len: usize = 0,
 

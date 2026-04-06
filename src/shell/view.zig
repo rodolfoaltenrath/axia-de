@@ -212,8 +212,22 @@ pub const View = struct {
         return self.mapped and !self.minimized;
     }
 
+    pub fn mappedState(self: *const View) bool {
+        return self.mapped;
+    }
+
+    pub fn isMinimized(self: *const View) bool {
+        return self.minimized;
+    }
+
     pub fn title(self: *const View) []const u8 {
         return titleOrFallback(self.toplevel);
+    }
+
+    pub fn appId(self: *const View) []const u8 {
+        const raw_app_id = self.toplevel.*.app_id;
+        if (raw_app_id != null) return std.mem.span(raw_app_id);
+        return "";
     }
 
     pub fn setWorkspaceIndex(self: *View, workspace_index: usize) void {
@@ -258,6 +272,28 @@ pub const View = struct {
             return true;
         }
         return false;
+    }
+
+    pub fn restoreFromMinimized(self: *View) void {
+        if (!self.minimized) return;
+        self.minimized = false;
+        self.syncVisibility();
+        _ = c.wlr_xdg_surface_schedule_configure(self.xdg_surface);
+    }
+
+    pub fn applyTiledRect(self: *View, rect: c.struct_wlr_box, edges: u32) void {
+        self.minimized = false;
+        self.restore_x = rect.x;
+        self.restore_y = rect.y;
+        self.restore_width = rect.width;
+        self.restore_height = rect.height;
+        self.syncVisibility();
+        _ = c.wlr_xdg_toplevel_set_fullscreen(self.toplevel, false);
+        _ = c.wlr_xdg_toplevel_set_maximized(self.toplevel, false);
+        _ = c.wlr_xdg_toplevel_set_tiled(self.toplevel, edges);
+        _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, rect.width, rect.height);
+        self.setPosition(rect.x, rect.y);
+        _ = c.wlr_xdg_toplevel_set_size(self.toplevel, rect.width, rect.height);
     }
 
     fn titleOrFallback(toplevel: [*c]c.struct_wlr_xdg_toplevel) []const u8 {

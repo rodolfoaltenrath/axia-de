@@ -111,6 +111,7 @@ pub const Server = struct {
             input.seat,
             output_layout,
             scene.windowRoot(),
+            scene.overlayLayerRoot(),
             display,
         );
         errdefer xdg.deinit();
@@ -215,6 +216,9 @@ pub const Server = struct {
             ipcToggleLauncher,
             ipcGetRuntimeState,
             ipcSetWorkspaceWrap,
+            ipcFocusApp,
+            ipcShowPreview,
+            ipcHidePreview,
         );
         self.desktop_menu.setActionCallback(self, handleDesktopAction);
         self.settings.setApplyWallpaperCallback(self, handleApplyWallpaper);
@@ -262,7 +266,7 @@ pub const Server = struct {
         }
 
         self.panel.spawn(self.socket_name, self.ipc.path());
-        self.dock.spawn(self.socket_name);
+        self.dock.spawn(self.socket_name, self.ipc.path());
         log.info("Axia-DE core is running on WAYLAND_DISPLAY={s}", .{std.mem.span(self.socket_name)});
         c.wl_display_run(self.display);
     }
@@ -449,6 +453,26 @@ pub const Server = struct {
         };
     }
 
+    fn ipcFocusApp(ctx: ?*anyopaque, app_id: []const u8) bool {
+        const raw_server = ctx orelse return false;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        return server.focusApp(app_id);
+    }
+
+    fn ipcShowPreview(ctx: ?*anyopaque, app_id: []const u8, anchor_x: i32) void {
+        const raw_server = ctx orelse return;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        server.xdg.showAppPreview(app_id, anchor_x) catch |err| {
+            log.err("failed to show app preview: {}", .{err});
+        };
+    }
+
+    fn ipcHidePreview(ctx: ?*anyopaque) void {
+        const raw_server = ctx orelse return;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        server.xdg.hideAppPreview();
+    }
+
     fn handleDesktopAction(ctx: ?*anyopaque, action: DesktopAction) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
@@ -509,7 +533,13 @@ pub const Server = struct {
             display.primary = self.xdg.primary_output != null and self.xdg.primary_output.? == output.wlr_output;
         }
 
+        self.xdg.populateRuntimeApps(&snapshot);
+
         return snapshot;
+    }
+
+    fn focusApp(self: *Server, app_id: []const u8) bool {
+        return self.xdg.focusAppById(app_id);
     }
 
     fn setWorkspaceWrap(self: *Server, enabled: bool) !void {

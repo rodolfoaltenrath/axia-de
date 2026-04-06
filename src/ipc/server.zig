@@ -28,6 +28,9 @@ pub const SetWallpaperCallback = *const fn (?*anyopaque, []const u8) void;
 pub const ToggleLauncherCallback = *const fn (?*anyopaque) void;
 pub const GetRuntimeStateCallback = *const fn (?*anyopaque) settings_model.RuntimeState;
 pub const SetWorkspaceWrapCallback = *const fn (?*anyopaque, bool) void;
+pub const FocusAppCallback = *const fn (?*anyopaque, []const u8) bool;
+pub const ShowPreviewCallback = *const fn (?*anyopaque, []const u8, i32) void;
+pub const HidePreviewCallback = *const fn (?*anyopaque) void;
 
 pub const IpcServer = struct {
     allocator: std.mem.Allocator,
@@ -43,6 +46,9 @@ pub const IpcServer = struct {
     toggle_launcher_cb: ?ToggleLauncherCallback = null,
     get_runtime_state_cb: ?GetRuntimeStateCallback = null,
     set_workspace_wrap_cb: ?SetWorkspaceWrapCallback = null,
+    focus_app_cb: ?FocusAppCallback = null,
+    show_preview_cb: ?ShowPreviewCallback = null,
+    hide_preview_cb: ?HidePreviewCallback = null,
 
     pub fn init(allocator: std.mem.Allocator) IpcServer {
         return .{ .allocator = allocator };
@@ -82,6 +88,9 @@ pub const IpcServer = struct {
         toggle_launcher_cb: ToggleLauncherCallback,
         get_runtime_state_cb: GetRuntimeStateCallback,
         set_workspace_wrap_cb: SetWorkspaceWrapCallback,
+        focus_app_cb: FocusAppCallback,
+        show_preview_cb: ShowPreviewCallback,
+        hide_preview_cb: HidePreviewCallback,
     ) void {
         self.ctx = ctx;
         self.get_workspace_state_cb = get_workspace_state_cb;
@@ -91,6 +100,9 @@ pub const IpcServer = struct {
         self.toggle_launcher_cb = toggle_launcher_cb;
         self.get_runtime_state_cb = get_runtime_state_cb;
         self.set_workspace_wrap_cb = set_workspace_wrap_cb;
+        self.focus_app_cb = focus_app_cb;
+        self.show_preview_cb = show_preview_cb;
+        self.hide_preview_cb = hide_preview_cb;
     }
 
     pub fn deinit(self: *IpcServer) void {
@@ -198,6 +210,47 @@ pub const IpcServer = struct {
             return;
         }
 
+        if (std.mem.startsWith(u8, request, "app focus ")) {
+            const app_id = std.mem.trim(u8, request["app focus ".len..], " \r\n\t");
+            if (app_id.len == 0) {
+                _ = std.posix.write(client_fd, "error invalid-app\n") catch {};
+                return;
+            }
+            const handled = if (self.focus_app_cb) |callback| callback(self.ctx, app_id) else false;
+            _ = std.posix.write(client_fd, if (handled) "ok\n" else "error not-found\n") catch {};
+            return;
+        }
+
+        if (std.mem.startsWith(u8, request, "preview show ")) {
+            const payload = std.mem.trim(u8, request["preview show ".len..], " \r\n\t");
+            var parts = std.mem.tokenizeAny(u8, payload, " ");
+            const app_id = parts.next() orelse {
+                _ = std.posix.write(client_fd, "error invalid-preview\n") catch {};
+                return;
+            };
+            const raw_anchor_x = parts.next() orelse {
+                _ = std.posix.write(client_fd, "error invalid-preview\n") catch {};
+                return;
+            };
+            const anchor_x = std.fmt.parseInt(i32, raw_anchor_x, 10) catch {
+                _ = std.posix.write(client_fd, "error invalid-preview\n") catch {};
+                return;
+            };
+            if (self.show_preview_cb) |callback| {
+                callback(self.ctx, app_id, anchor_x);
+            }
+            _ = std.posix.write(client_fd, "ok\n") catch {};
+            return;
+        }
+
+        if (std.mem.eql(u8, request, "preview hide")) {
+            if (self.hide_preview_cb) |callback| {
+                callback(self.ctx);
+            }
+            _ = std.posix.write(client_fd, "ok\n") catch {};
+            return;
+        }
+
         _ = std.posix.write(client_fd, "error unknown-command\n") catch {};
     }
 
@@ -243,6 +296,14 @@ pub const IpcServer = struct {
             writer.print(
                 "display {} {} {} {} {s}\n",
                 .{ index, display.width, display.height, @intFromBool(display.primary), display.nameText() },
+            ) catch return;
+        }
+
+        for (0..state.app_count) |index| {
+            const app = state.apps[index];
+            writer.print(
+                "app {} {} {s} {s}\n",
+                .{ index, @intFromBool(app.focused), app.idText(), app.titleText() },
             ) catch return;
         }
 

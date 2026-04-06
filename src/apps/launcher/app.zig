@@ -1,7 +1,8 @@
 const std = @import("std");
 const c = @import("client_wl").c;
 const buffer_mod = @import("client_buffer");
-const catalog = @import("apps_catalog");
+const runtime_catalog = @import("runtime_catalog");
+const launcher_state = @import("launcher_state");
 const model = @import("model.zig");
 const render = @import("render.zig");
 
@@ -38,6 +39,9 @@ pub const App = struct {
     frame_callback: ?*c.struct_wl_callback = null,
     frame_pending: bool = false,
     launcher: model.State = .{},
+    catalog: runtime_catalog.Catalog,
+    state_store: launcher_state.State,
+    recent_entries: std.ArrayListUnmanaged(runtime_catalog.AppEntry) = .empty,
     registry_listener: c.struct_wl_registry_listener = undefined,
     wm_base_listener: c.struct_xdg_wm_base_listener = undefined,
     xdg_surface_listener: c.struct_xdg_surface_listener = undefined,
@@ -59,7 +63,13 @@ pub const App = struct {
             .allocator = allocator,
             .display = display,
             .registry = registry,
+            .catalog = runtime_catalog.Catalog.init(allocator),
+            .state_store = undefined,
         };
+        try app.catalog.loadDefault();
+        app.state_store = try launcher_state.load(allocator);
+        try app.state_store.ensureDefaultFavorites(&app.catalog);
+        app.recent_entries = try app.state_store.recentEntries(allocator, &app.catalog, model.max_search_results);
 
         app.registry_listener = .{ .global = handleGlobal, .global_remove = handleGlobalRemove };
         _ = c.wl_registry_add_listener(registry, &app.registry_listener, app);
@@ -89,6 +99,9 @@ pub const App = struct {
         if (self.wm_base) |wm_base| c.xdg_wm_base_destroy(wm_base);
         if (self.shm) |shm| c.wl_shm_destroy(shm);
         if (self.compositor) |compositor| c.wl_compositor_destroy(compositor);
+        self.recent_entries.deinit(self.allocator);
+        self.state_store.deinit();
+        self.catalog.deinit();
         c.wl_registry_destroy(self.registry);
         c.wl_display_disconnect(self.display);
     }
@@ -146,8 +159,9 @@ pub const App = struct {
             self.buffer = try buffer_mod.ShmBuffer.init(shm, self.current_width, self.current_height, "axia-launcher");
         }
         const buffer = &self.buffer.?;
-        const snapshot = self.launcher.snapshot(render.visibleResultLimit(self.current_height));
-        const card = render.cardRect(self.current_width, self.current_height, snapshot.query.len > 0, snapshot.count);
+        var snapshot = self.launcher.snapshotWithEntries(self.catalog.entries.items, self.recent_entries.items, render.visibleResultLimit(self.current_height));
+        self.applyFavoriteFlags(&snapshot);
+        const card = render.cardRect(self.current_width, self.current_height, snapshot);
         render.draw(buffer.cr, self.current_width, self.current_height, snapshot, self.hovered_index);
         c.cairo_surface_flush(buffer.surface);
 
@@ -184,15 +198,54 @@ pub const App = struct {
     }
 
     fn launchCatalogIndex(self: *App, index: usize) void {
-        if (index >= catalog.entries.len) return;
-        if (!catalog.entries[index].enabled or catalog.entries[index].command.len == 0) return;
-        self.spawnCommand(catalog.entries[index].command) catch |err| {
+        if (index >= self.catalog.entries.items.len) return;
+        const entry = self.catalog.entries.items[index];
+        if (!entry.enabled or entry.command.len == 0) return;
+        self.state_store.recordRecent(entry.id) catch |err| {
+            log.err("failed to persist launcher recent app: {}", .{err});
+        };
+        self.state_store.save() catch |err| {
+            log.err("failed to save launcher state: {}", .{err});
+        };
+        self.reloadRecentEntries() catch |err| {
+            log.err("failed to refresh launcher recents: {}", .{err});
+        };
+        self.spawnCommand(entry.command) catch |err| {
             log.err("failed to launch app: {}", .{err});
         };
     }
 
+    fn toggleFavoriteCatalogIndex(self: *App, index: usize) void {
+        if (index >= self.catalog.entries.items.len) return;
+        const entry = self.catalog.entries.items[index];
+        if (entry.id.len == 0) return;
+
+        _ = self.state_store.toggleFavorite(entry.id) catch |err| {
+            log.err("failed to toggle launcher favorite: {}", .{err});
+            return;
+        };
+        self.state_store.save() catch |err| {
+            log.err("failed to save launcher favorites: {}", .{err});
+            return;
+        };
+        self.dirty = true;
+    }
+
+    fn reloadRecentEntries(self: *App) !void {
+        self.recent_entries.deinit(self.allocator);
+        self.recent_entries = try self.state_store.recentEntries(self.allocator, &self.catalog, model.max_search_results);
+    }
+
+    fn applyFavoriteFlags(self: *const App, snapshot: *model.Snapshot) void {
+        for (0..snapshot.count) |index| {
+            const catalog_index = snapshot.entries[index].catalog_index;
+            if (catalog_index >= self.catalog.entries.items.len) continue;
+            snapshot.entries[index].favorite = self.state_store.isFavorite(self.catalog.entries.items[catalog_index].id);
+        }
+    }
+
     fn updateHover(self: *App) void {
-        const snapshot = self.launcher.snapshot(render.visibleResultLimit(self.current_height));
+        const snapshot = self.launcher.snapshotWithEntries(self.catalog.entries.items, self.recent_entries.items, render.visibleResultLimit(self.current_height));
         const hovered = render.hitTest(self.current_width, self.current_height, self.pointer_x, self.pointer_y, snapshot);
         if (hovered != self.hovered_index) {
             self.hovered_index = hovered;
@@ -331,8 +384,14 @@ pub const App = struct {
         if (state != c.WL_POINTER_BUTTON_STATE_PRESSED or button != 0x110) return;
         const raw_app = data orelse return;
         const app: *App = @ptrCast(@alignCast(raw_app));
+        const snapshot = app.launcher.snapshotWithEntries(app.catalog.entries.items, app.recent_entries.items, render.visibleResultLimit(app.current_height));
+        if (render.favoriteHitTest(app.current_width, app.current_height, app.pointer_x, app.pointer_y, snapshot)) |favorite_index| {
+            if (favorite_index >= snapshot.count) return;
+            app.toggleFavoriteCatalogIndex(snapshot.entries[favorite_index].catalog_index);
+            return;
+        }
+
         const hovered = app.hovered_index orelse return;
-        const snapshot = app.launcher.snapshot(render.visibleResultLimit(app.current_height));
         if (hovered >= snapshot.count) return;
         app.launchCatalogIndex(snapshot.entries[hovered].catalog_index);
     }
@@ -394,12 +453,12 @@ pub const App = struct {
                 return;
             },
             c.XKB_KEY_Return, c.XKB_KEY_KP_Enter => {
-                const catalog_index = app.launcher.selectedCatalogIndex(render.visibleResultLimit(app.current_height)) orelse return;
+                const catalog_index = app.launcher.selectedCatalogIndexWithEntries(app.catalog.entries.items, app.recent_entries.items, render.visibleResultLimit(app.current_height)) orelse return;
                 app.launchCatalogIndex(catalog_index);
                 return;
             },
-            c.XKB_KEY_Up => app.launcher.moveSelection(render.visibleResultLimit(app.current_height), -1),
-            c.XKB_KEY_Down => app.launcher.moveSelection(render.visibleResultLimit(app.current_height), 1),
+            c.XKB_KEY_Up => app.launcher.moveSelectionWithEntries(app.catalog.entries.items, app.recent_entries.items, render.visibleResultLimit(app.current_height), -1),
+            c.XKB_KEY_Down => app.launcher.moveSelectionWithEntries(app.catalog.entries.items, app.recent_entries.items, render.visibleResultLimit(app.current_height), 1),
             c.XKB_KEY_BackSpace => app.launcher.backspace(),
             else => {
                 var utf8_buf = [_]u8{0} ** 64;
