@@ -10,6 +10,11 @@ const log = std.log.scoped(.axia_files);
 const width: u32 = 920;
 const height: u32 = 580;
 
+pub const Mode = enum {
+    browser,
+    wallpaper_picker,
+};
+
 pub const App = struct {
     allocator: std.mem.Allocator,
     display: *c.struct_wl_display,
@@ -34,6 +39,7 @@ pub const App = struct {
     last_button_serial: u32 = 0,
     maximized: bool = false,
     sidebar_collapsed: bool = false,
+    mode: Mode = .browser,
     browser: browser.Browser,
     icons: icons.SidebarIcons,
     registry_listener: c.struct_wl_registry_listener = undefined,
@@ -43,7 +49,7 @@ pub const App = struct {
     seat_listener: c.struct_wl_seat_listener = undefined,
     pointer_listener: c.struct_wl_pointer_listener = undefined,
 
-    pub fn create(allocator: std.mem.Allocator) !*App {
+    pub fn create(allocator: std.mem.Allocator, mode: Mode) !*App {
         const app = try allocator.create(App);
         errdefer allocator.destroy(app);
 
@@ -55,7 +61,11 @@ pub const App = struct {
             .allocator = allocator,
             .display = display,
             .registry = registry,
-            .browser = browser.Browser.init(allocator),
+            .mode = mode,
+            .browser = browser.Browser.init(allocator, switch (mode) {
+                .browser => .browser,
+                .wallpaper_picker => .wallpaper_picker,
+            }),
             .icons = try icons.SidebarIcons.init(allocator),
         };
 
@@ -114,7 +124,7 @@ pub const App = struct {
         const toplevel = c.xdg_surface_get_toplevel(xdg_surface) orelse return error.XdgToplevelCreateFailed;
         errdefer c.xdg_toplevel_destroy(toplevel);
 
-        c.xdg_toplevel_set_title(toplevel, "Arquivos");
+        c.xdg_toplevel_set_title(toplevel, if (self.mode == .wallpaper_picker) "Selecionar Wallpaper" else "Arquivos");
         c.xdg_toplevel_set_app_id(toplevel, "axia-files");
 
         self.wm_base_listener = .{ .ping = handlePing };
@@ -152,6 +162,7 @@ pub const App = struct {
             self.hovered,
             self.sidebar_collapsed,
             &self.icons,
+            self.mode == .wallpaper_picker,
         );
         c.cairo_surface_flush(buffer.surface);
         c.wl_surface_attach(self.wl_surface.?, buffer.buffer, 0, 0);
@@ -202,9 +213,26 @@ pub const App = struct {
             .next => self.browser.nextPage(),
             .sort_modified => self.browser.toggleModifiedSort(),
             .sidebar => |target| self.browser.openSidebar(target) catch {},
-            .entry => |index| self.browser.activateVisible(index) catch {},
+            .entry => |index| {
+                if (self.mode == .wallpaper_picker) {
+                    self.handleWallpaperPickerEntry(index);
+                } else {
+                    self.browser.activateVisible(index) catch {};
+                }
+            },
         }
         self.dirty = true;
+    }
+
+    fn handleWallpaperPickerEntry(self: *App, index: usize) void {
+        const entry = self.browser.visibleEntry(index) orelse return;
+        switch (entry.kind) {
+            .directory => self.browser.openDirectory(entry.path) catch {},
+            .file => {
+                std.fs.File.stdout().deprecatedWriter().print("{s}\n", .{entry.path}) catch {};
+                self.running = false;
+            },
+        }
     }
 
     fn setSeat(self: *App, seat: *c.struct_wl_seat) void {

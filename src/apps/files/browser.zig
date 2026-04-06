@@ -72,6 +72,11 @@ pub const SidebarTarget = enum {
     network,
 };
 
+pub const Mode = enum {
+    browser,
+    wallpaper_picker,
+};
+
 pub const sidebar_items = [_]struct {
     target: SidebarTarget,
     label: []const u8,
@@ -91,6 +96,7 @@ pub const sidebar_items = [_]struct {
 
 pub const Browser = struct {
     allocator: std.mem.Allocator,
+    mode: Mode = .browser,
     current_dir: ?[]u8 = null,
     selected_path: ?[]u8 = null,
     entries: std.ArrayListUnmanaged(Entry) = .empty,
@@ -98,8 +104,11 @@ pub const Browser = struct {
     sort_field: SortField = .modified,
     modified_descending: bool = true,
 
-    pub fn init(allocator: std.mem.Allocator) Browser {
-        return .{ .allocator = allocator };
+    pub fn init(allocator: std.mem.Allocator, mode: Mode) Browser {
+        return .{
+            .allocator = allocator,
+            .mode = mode,
+        };
     }
 
     pub fn deinit(self: *Browser) void {
@@ -110,6 +119,13 @@ pub const Browser = struct {
 
     pub fn ensureDefaultDirectory(self: *Browser) !void {
         if (self.current_dir != null) return;
+        if (self.mode == .wallpaper_picker) {
+            self.openSidebar(.pictures) catch |err| switch (err) {
+                error.FileNotFound => try self.openSidebar(.home),
+                else => return err,
+            };
+            return;
+        }
         try self.openSidebar(.home);
     }
 
@@ -148,7 +164,7 @@ pub const Browser = struct {
 
             const kind: ?EntryKind = switch (entry.kind) {
                 .directory => .directory,
-                .file => .file,
+                .file => if (self.mode == .wallpaper_picker and !isSupportedImage(entry.name)) null else .file,
                 else => null,
             };
             if (kind == null) continue;
@@ -282,6 +298,19 @@ fn normalizeAbsolute(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     const cwd = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
     return try std.fs.path.join(allocator, &.{ cwd, path });
+}
+
+fn isSupportedImage(name: []const u8) bool {
+    return endsWithIgnoreCase(name, ".png") or
+        endsWithIgnoreCase(name, ".jpg") or
+        endsWithIgnoreCase(name, ".jpeg") or
+        endsWithIgnoreCase(name, ".webp") or
+        endsWithIgnoreCase(name, ".bmp");
+}
+
+fn endsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    return std.ascii.eqlIgnoreCase(haystack[haystack.len - needle.len ..], needle);
 }
 
 fn lessThan(browser_state: Browser, lhs: Entry, rhs: Entry) bool {

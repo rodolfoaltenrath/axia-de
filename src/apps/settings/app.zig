@@ -2,8 +2,8 @@ const std = @import("std");
 const c = @import("client_wl").c;
 const buffer_mod = @import("client_buffer");
 const prefs = @import("axia_prefs");
-const settings_files = @import("settings_files");
 const settings_model = @import("settings_model");
+const file_picker = @import("settings_picker");
 const ipc = @import("ipc.zig");
 const render = @import("render.zig");
 
@@ -29,12 +29,16 @@ pub const App = struct {
     current_height: u32 = render.window_height,
     pointer_x: f64 = 0,
     pointer_y: f64 = 0,
+    scroll_y: f64 = 0,
+    scroll_drag_active: bool = false,
+    scroll_drag_offset_y: f64 = 0,
     hovered: render.Hit = .none,
     last_button_serial: u32 = 0,
     maximized: bool = false,
     page: settings_model.Page = .wallpapers,
-    browser: settings_files.Browser,
     current_wallpaper_path: ?[]u8 = null,
+    preferences: settings_model.PreferencesState = .{},
+    runtime: settings_model.RuntimeState = .{},
     ipc_socket_path: ?[]u8 = null,
     registry_listener: c.struct_wl_registry_listener = undefined,
     wm_base_listener: c.struct_xdg_wm_base_listener = undefined,
@@ -56,7 +60,6 @@ pub const App = struct {
             .display = display,
             .registry = registry,
             .page = initial_page,
-            .browser = settings_files.Browser.init(allocator),
         };
 
         const maybe_socket = std.process.getEnvVarOwned(allocator, "AXIA_IPC_SOCKET") catch null;
@@ -64,9 +67,11 @@ pub const App = struct {
 
         var loaded_prefs = try prefs.load(allocator);
         defer loaded_prefs.deinit();
+        app.preferences = preferencesStateFromStored(loaded_prefs);
         if (loaded_prefs.wallpaper_path) |path| {
             app.current_wallpaper_path = try allocator.dupe(u8, path);
         }
+        app.refreshRuntimeState();
 
         app.registry_listener = .{ .global = handleGlobal, .global_remove = handleGlobalRemove };
         _ = c.wl_registry_add_listener(registry, &app.registry_listener, app);
@@ -74,9 +79,6 @@ pub const App = struct {
         if (c.wl_display_roundtrip(display) < 0) return error.RoundtripFailed;
         if (app.compositor == null or app.shm == null or app.wm_base == null) return error.RequiredGlobalsMissing;
 
-        if (app.page == .wallpapers) {
-            try app.browser.ensureDefaultDirectory();
-        }
         try app.createWindow();
         return app;
     }
@@ -97,7 +99,6 @@ pub const App = struct {
         if (self.wm_base) |wm_base| c.xdg_wm_base_destroy(wm_base);
         if (self.shm) |shm| c.wl_shm_destroy(shm);
         if (self.compositor) |compositor| c.wl_compositor_destroy(compositor);
-        self.browser.deinit();
         if (self.current_wallpaper_path) |path| self.allocator.free(path);
         if (self.ipc_socket_path) |path| self.allocator.free(path);
         c.wl_registry_destroy(self.registry);
@@ -155,7 +156,9 @@ pub const App = struct {
             .page = self.page,
             .hovered = self.hovered,
             .current_wallpaper_path = self.current_wallpaper_path,
-            .browser = self.browser.snapshot(),
+            .preferences = self.preferences,
+            .runtime = self.runtime,
+            .scroll_y = self.scroll_y,
         });
         c.cairo_surface_flush(buffer.surface);
         c.wl_surface_attach(self.wl_surface.?, buffer.buffer, 0, 0);
@@ -165,7 +168,6 @@ pub const App = struct {
     }
 
     fn applyWallpaper(self: *App, path: []const u8) !void {
-        try prefs.saveWallpaper(self.allocator, path);
         if (self.ipc_socket_path) |socket| {
             ipc.setWallpaper(self.allocator, socket, path) catch |err| {
                 log.err("failed to send wallpaper over ipc: {}", .{err});
@@ -174,6 +176,7 @@ pub const App = struct {
 
         if (self.current_wallpaper_path) |existing| self.allocator.free(existing);
         self.current_wallpaper_path = try self.allocator.dupe(u8, path);
+        try self.savePreferences();
         self.dirty = true;
     }
 
@@ -187,7 +190,9 @@ pub const App = struct {
                 .page = self.page,
                 .hovered = self.hovered,
                 .current_wallpaper_path = self.current_wallpaper_path,
-                .browser = self.browser.snapshot(),
+                .preferences = self.preferences,
+                .runtime = self.runtime,
+                .scroll_y = self.scroll_y,
             },
         );
         if (!hitEquals(new_hovered, self.hovered)) {
@@ -198,11 +203,10 @@ pub const App = struct {
 
     fn setPage(self: *App, page: settings_model.Page) void {
         self.page = page;
+        self.scroll_y = 0;
         self.hovered = .none;
-        if (page == .wallpapers) {
-            self.browser.ensureDefaultDirectory() catch |err| {
-                log.err("failed to prepare wallpaper browser: {}", .{err});
-            };
+        if (page == .displays or page == .workspaces or page == .about) {
+            self.refreshRuntimeState();
         }
         self.dirty = true;
     }
@@ -231,23 +235,102 @@ pub const App = struct {
                     log.err("failed to apply preset wallpaper: {}", .{err});
                 };
             },
-            .browser_home => self.browser.openHome() catch {},
-            .browser_pictures => self.browser.openPictures() catch {},
-            .browser_downloads => self.browser.openDownloads() catch {},
-            .browser_up => self.browser.goParent() catch {},
-            .browser_prev => self.browser.previousPage(),
-            .browser_next => self.browser.nextPage(),
-            .browser_entry => |index| {
-                const entry = self.browser.visibleEntry(index) orelse return;
-                switch (entry.kind) {
-                    .directory => self.browser.openDirectory(entry.path) catch {},
-                    .image => self.applyWallpaper(entry.path) catch |err| {
-                        log.err("failed to apply local wallpaper: {}", .{err});
-                    },
+            .browser_manual => {
+                self.openWallpaperPicker() catch |err| {
+                    log.err("failed to open wallpaper picker: {}", .{err});
+                };
+            },
+            .accent_preset => |preset| {
+                self.preferences.accent = preset;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save appearance settings: {}", .{err});
+                };
+            },
+            .reduce_transparency => {
+                self.preferences.reduce_transparency = !self.preferences.reduce_transparency;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save appearance settings: {}", .{err});
+                };
+            },
+            .panel_show_seconds => {
+                self.preferences.panel_show_seconds = !self.preferences.panel_show_seconds;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save panel settings: {}", .{err});
+                };
+            },
+            .panel_show_date => {
+                self.preferences.panel_show_date = !self.preferences.panel_show_date;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save panel settings: {}", .{err});
+                };
+            },
+            .workspace_wrap => {
+                self.preferences.workspace_wrap = !self.preferences.workspace_wrap;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save workspace settings: {}", .{err});
+                };
+                if (self.ipc_socket_path) |socket| {
+                    ipc.setWorkspaceWrap(self.allocator, socket, self.preferences.workspace_wrap) catch |err| {
+                        log.err("failed to update workspace wrap over ipc: {}", .{err});
+                    };
                 }
+                self.refreshRuntimeState();
+            },
+            .startup_workspace => |index| {
+                self.preferences.startup_workspace = index;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save startup workspace: {}", .{err});
+                };
+                if (self.ipc_socket_path) |socket| {
+                    ipc.activateWorkspace(self.allocator, socket, index) catch |err| {
+                        log.err("failed to activate workspace over ipc: {}", .{err});
+                    };
+                }
+                self.refreshRuntimeState();
+            },
+            .scroll_thumb => {
+                const thumb = render.scrollThumbRect(self.current_width, self.current_height, scrollState(self));
+                self.scroll_drag_active = true;
+                self.scroll_drag_offset_y = self.pointer_y - thumb.y;
+            },
+            .scroll_track => {
+                const thumb = render.scrollThumbRect(self.current_width, self.current_height, scrollState(self));
+                self.scroll_drag_active = true;
+                self.scroll_drag_offset_y = thumb.height / 2.0;
+                updateScrollFromPointer(self);
             },
         }
         self.dirty = true;
+    }
+
+    fn savePreferences(self: *App) !void {
+        var stored = prefs.Preferences{
+            .allocator = self.allocator,
+            .accent = storedAccentFromSettings(self.preferences.accent),
+            .reduce_transparency = self.preferences.reduce_transparency,
+            .panel_show_seconds = self.preferences.panel_show_seconds,
+            .panel_show_date = self.preferences.panel_show_date,
+            .workspace_wrap = self.preferences.workspace_wrap,
+            .startup_workspace = self.preferences.startup_workspace,
+        };
+        defer stored.deinit();
+
+        if (self.current_wallpaper_path) |path| {
+            stored.wallpaper_path = try self.allocator.dupe(u8, path);
+        }
+
+        try stored.save();
+    }
+
+    fn refreshRuntimeState(self: *App) void {
+        const socket = self.ipc_socket_path orelse return;
+        self.runtime = ipc.getRuntimeState(self.allocator, socket) catch self.runtime;
+    }
+
+    fn openWallpaperPicker(self: *App) !void {
+        const selected_path = try file_picker.pickImagePath(self.allocator) orelse return;
+        defer self.allocator.free(selected_path);
+        try self.applyWallpaper(selected_path);
     }
 
     fn setSeat(self: *App, seat: *c.struct_wl_seat) void {
@@ -290,6 +373,7 @@ pub const App = struct {
         if (width_arg > 0) app.current_width = @intCast(width_arg);
         if (height_arg > 0) app.current_height = @intCast(height_arg);
         app.maximized = hasState(states, c.XDG_TOPLEVEL_STATE_MAXIMIZED);
+        clampScroll(app);
         app.dirty = true;
     }
 
@@ -340,6 +424,7 @@ pub const App = struct {
     fn handlePointerLeave(data: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: ?*c.struct_wl_surface) callconv(.c) void {
         const raw_app = data orelse return;
         const app: *App = @ptrCast(@alignCast(raw_app));
+        app.scroll_drag_active = false;
         app.hovered = .none;
         app.dirty = true;
     }
@@ -349,23 +434,51 @@ pub const App = struct {
         const app: *App = @ptrCast(@alignCast(raw_app));
         app.pointer_x = c.wl_fixed_to_double(sx);
         app.pointer_y = c.wl_fixed_to_double(sy);
+        if (app.scroll_drag_active) {
+            updateScrollFromPointer(app);
+            return;
+        }
         app.updateHover();
     }
 
     fn handlePointerButton(data: ?*anyopaque, _: ?*c.struct_wl_pointer, serial: u32, _: u32, button: u32, state: u32) callconv(.c) void {
-        if (button != 0x110 or state != c.WL_POINTER_BUTTON_STATE_PRESSED) return;
         const raw_app = data orelse return;
         const app: *App = @ptrCast(@alignCast(raw_app));
+        if (button != 0x110) return;
+        if (state == c.WL_POINTER_BUTTON_STATE_RELEASED) {
+            app.scroll_drag_active = false;
+            return;
+        }
+        if (state != c.WL_POINTER_BUTTON_STATE_PRESSED) return;
         app.last_button_serial = serial;
         app.handleAction();
     }
 
-    fn handlePointerAxis(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: u32, _: c.wl_fixed_t) callconv(.c) void {}
+    fn handlePointerAxis(data: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, axis: u32, value: c.wl_fixed_t) callconv(.c) void {
+        if (axis != c.WL_POINTER_AXIS_VERTICAL_SCROLL) return;
+        const raw_app = data orelse return;
+        const app: *App = @ptrCast(@alignCast(raw_app));
+        const delta = c.wl_fixed_to_double(value);
+        if (@abs(delta) < 0.001) return;
+        scrollBy(app, -delta * 32.0);
+    }
+
     fn handlePointerFrame(_: ?*anyopaque, _: ?*c.struct_wl_pointer) callconv(.c) void {}
     fn handlePointerAxisSource(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32) callconv(.c) void {}
     fn handlePointerAxisStop(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: u32) callconv(.c) void {}
-    fn handlePointerAxisDiscrete(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: i32) callconv(.c) void {}
-    fn handlePointerAxisValue120(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: i32) callconv(.c) void {}
+    fn handlePointerAxisDiscrete(data: ?*anyopaque, _: ?*c.struct_wl_pointer, axis: u32, discrete: i32) callconv(.c) void {
+        if (axis != c.WL_POINTER_AXIS_VERTICAL_SCROLL or discrete == 0) return;
+        const raw_app = data orelse return;
+        const app: *App = @ptrCast(@alignCast(raw_app));
+        scrollBy(app, -@as(f64, @floatFromInt(discrete)) * 56.0);
+    }
+
+    fn handlePointerAxisValue120(data: ?*anyopaque, _: ?*c.struct_wl_pointer, axis: u32, value120: i32) callconv(.c) void {
+        if (axis != c.WL_POINTER_AXIS_VERTICAL_SCROLL or value120 == 0) return;
+        const raw_app = data orelse return;
+        const app: *App = @ptrCast(@alignCast(raw_app));
+        scrollBy(app, -(@as(f64, @floatFromInt(value120)) / 120.0) * 56.0);
+    }
     fn handlePointerAxisRelativeDirection(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: u32) callconv(.c) void {}
 };
 
@@ -388,12 +501,84 @@ fn hitEquals(a: render.Hit, b: render.Hit) bool {
         .close => b == .close,
         .nav => b == .nav and a.nav == b.nav,
         .wallpaper_preset => b == .wallpaper_preset and a.wallpaper_preset == b.wallpaper_preset,
-        .browser_home => b == .browser_home,
-        .browser_pictures => b == .browser_pictures,
-        .browser_downloads => b == .browser_downloads,
-        .browser_up => b == .browser_up,
-        .browser_prev => b == .browser_prev,
-        .browser_next => b == .browser_next,
-        .browser_entry => b == .browser_entry and a.browser_entry == b.browser_entry,
+        .browser_manual => b == .browser_manual,
+        .accent_preset => b == .accent_preset and a.accent_preset == b.accent_preset,
+        .reduce_transparency => b == .reduce_transparency,
+        .panel_show_seconds => b == .panel_show_seconds,
+        .panel_show_date => b == .panel_show_date,
+        .workspace_wrap => b == .workspace_wrap,
+        .startup_workspace => b == .startup_workspace and a.startup_workspace == b.startup_workspace,
+        .scroll_thumb => b == .scroll_thumb,
+        .scroll_track => b == .scroll_track,
     };
+}
+
+fn preferencesStateFromStored(stored: prefs.Preferences) settings_model.PreferencesState {
+    return .{
+        .accent = settingsAccentFromStored(stored.accent),
+        .reduce_transparency = stored.reduce_transparency,
+        .panel_show_seconds = stored.panel_show_seconds,
+        .panel_show_date = stored.panel_show_date,
+        .workspace_wrap = stored.workspace_wrap,
+        .startup_workspace = stored.startup_workspace,
+    };
+}
+
+fn settingsAccentFromStored(accent: prefs.AccentPreset) settings_model.AccentPreset {
+    return switch (accent) {
+        .aurora => .aurora,
+        .ember => .ember,
+        .moss => .moss,
+    };
+}
+
+fn storedAccentFromSettings(accent: settings_model.AccentPreset) prefs.AccentPreset {
+    return switch (accent) {
+        .aurora => .aurora,
+        .ember => .ember,
+        .moss => .moss,
+    };
+}
+
+fn scrollState(app: *App) render.State {
+    return .{
+        .page = app.page,
+        .hovered = app.hovered,
+        .current_wallpaper_path = app.current_wallpaper_path,
+        .preferences = app.preferences,
+        .runtime = app.runtime,
+        .scroll_y = app.scroll_y,
+    };
+}
+
+fn clampScroll(app: *App) void {
+    const max_scroll = render.maxScroll(app.current_width, app.current_height, scrollState(app));
+    app.scroll_y = std.math.clamp(app.scroll_y, 0.0, max_scroll);
+}
+
+fn scrollBy(app: *App, delta: f64) void {
+    if (!render.scrollViewportRect(app.current_width, app.current_height).contains(app.pointer_x, app.pointer_y)) return;
+    const previous = app.scroll_y;
+    app.scroll_y += delta;
+    clampScroll(app);
+    if (@abs(app.scroll_y - previous) < 0.001) return;
+    app.updateHover();
+    app.dirty = true;
+}
+
+fn updateScrollFromPointer(app: *App) void {
+    const track = render.scrollTrackRect(app.current_width, app.current_height);
+    const thumb = render.scrollThumbRect(app.current_width, app.current_height, scrollState(app));
+    const max_scroll = render.maxScroll(app.current_width, app.current_height, scrollState(app));
+    if (max_scroll <= 0.0) return;
+
+    const available = @max(0.0, track.height - thumb.height);
+    if (available <= 0.0) return;
+
+    const desired_y = std.math.clamp(app.pointer_y - app.scroll_drag_offset_y, track.y, track.y + available);
+    const progress = (desired_y - track.y) / available;
+    app.scroll_y = progress * max_scroll;
+    clampScroll(app);
+    app.updateHover();
+    app.dirty = true;
 }

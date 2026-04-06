@@ -16,7 +16,10 @@ const WallpaperAsset = @import("../render/wallpaper.zig").WallpaperAsset;
 const DesktopMenu = @import("../desktop/menu.zig").DesktopMenu;
 const DesktopAction = @import("../desktop/actions.zig").Action;
 const SettingsManager = @import("../settings/manager.zig").SettingsManager;
-const SettingsPage = @import("../settings/model.zig").Page;
+const settings_model = @import("../settings/model.zig");
+const SettingsPage = settings_model.Page;
+const SettingsRuntimeState = settings_model.RuntimeState;
+const SettingsPreferencesState = settings_model.PreferencesState;
 const Preferences = @import("../config/preferences.zig");
 
 const log = std.log.scoped(.axia);
@@ -46,6 +49,7 @@ pub const Server = struct {
     wallpaper: ?*WallpaperAsset,
     desktop_menu: DesktopMenu,
     settings: SettingsManager,
+    settings_prefs: SettingsPreferencesState,
 
     pub fn init(allocator: std.mem.Allocator) !Server {
         c.wlr_log_init(c.WLR_ERROR, null);
@@ -119,6 +123,18 @@ pub const Server = struct {
 
         var preferences = try Preferences.load(allocator);
         defer preferences.deinit();
+        const settings_prefs: SettingsPreferencesState = .{
+            .accent = switch (preferences.accent) {
+                .aurora => .aurora,
+                .ember => .ember,
+                .moss => .moss,
+            },
+            .reduce_transparency = preferences.reduce_transparency,
+            .panel_show_seconds = preferences.panel_show_seconds,
+            .panel_show_date = preferences.panel_show_date,
+            .workspace_wrap = preferences.workspace_wrap,
+            .startup_workspace = preferences.startup_workspace,
+        };
 
         const wallpaper = blk: {
             if (preferences.wallpaper_path) |path| {
@@ -148,6 +164,9 @@ pub const Server = struct {
             try settings.setCurrentWallpaperPath(asset.source_path);
         }
 
+        xdg.setWorkspaceWrap(settings_prefs.workspace_wrap);
+        xdg.activateWorkspace(settings_prefs.startup_workspace);
+
         log.info("Wayland socket ready at {s}", .{std.mem.span(socket_name)});
 
         return .{
@@ -172,6 +191,7 @@ pub const Server = struct {
             .wallpaper = wallpaper,
             .desktop_menu = desktop_menu,
             .settings = settings,
+            .settings_prefs = settings_prefs,
         };
     }
 
@@ -186,7 +206,16 @@ pub const Server = struct {
         self.layers.setupListeners();
         self.xdg.setupListeners();
         self.decorations.setupListeners();
-        self.ipc.setWorkspaceCallbacks(self, ipcGetWorkspaceState, ipcActivateWorkspace, ipcMoveFocusedWorkspace, ipcSetWallpaper, ipcToggleLauncher);
+        self.ipc.setWorkspaceCallbacks(
+            self,
+            ipcGetWorkspaceState,
+            ipcActivateWorkspace,
+            ipcMoveFocusedWorkspace,
+            ipcSetWallpaper,
+            ipcToggleLauncher,
+            ipcGetRuntimeState,
+            ipcSetWorkspaceWrap,
+        );
         self.desktop_menu.setActionCallback(self, handleDesktopAction);
         self.settings.setApplyWallpaperCallback(self, handleApplyWallpaper);
     }
@@ -406,6 +435,20 @@ pub const Server = struct {
         server.toggleLauncher();
     }
 
+    fn ipcGetRuntimeState(ctx: ?*anyopaque) SettingsRuntimeState {
+        const raw_server = ctx orelse return .{};
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        return server.runtimeStateSnapshot();
+    }
+
+    fn ipcSetWorkspaceWrap(ctx: ?*anyopaque, enabled: bool) void {
+        const raw_server = ctx orelse return;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        server.setWorkspaceWrap(enabled) catch |err| {
+            log.err("failed to set workspace wrap: {}", .{err});
+        };
+    }
+
     fn handleDesktopAction(ctx: ?*anyopaque, action: DesktopAction) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
@@ -417,9 +460,7 @@ pub const Server = struct {
             .workspaces => .workspaces,
             .about => .about,
         };
-        server.settings.open(page) catch |err| {
-            log.err("failed to open settings page: {}", .{err});
-        };
+        server.spawnSettingsApp(page);
     }
 
     fn handleApplyWallpaper(ctx: ?*anyopaque, path: []const u8) void {
@@ -449,5 +490,139 @@ pub const Server = struct {
     fn toggleLauncher(self: *Server) void {
         if (self.xdg.dismissLauncher()) return;
         self.launcher.spawn(self.socket_name, self.ipc.path());
+    }
+
+    fn runtimeStateSnapshot(self: *const Server) SettingsRuntimeState {
+        var snapshot = SettingsRuntimeState{};
+        const workspace = self.xdg.workspaceSnapshot();
+        snapshot.workspace_current = workspace.current;
+        snapshot.workspace_count = workspace.count;
+        snapshot.socket_name_len = copyText(&snapshot.socket_name, std.mem.span(self.socket_name));
+
+        snapshot.display_count = @min(self.outputs.items.len, snapshot.displays.len);
+        for (self.outputs.items[0..snapshot.display_count], 0..) |output, index| {
+            const display = &snapshot.displays[index];
+            const name = std.mem.span(output.wlr_output.*.name);
+            display.name_len = copyText(&display.name, name);
+            display.width = @intCast(@max(output.wlr_output.*.width, 0));
+            display.height = @intCast(@max(output.wlr_output.*.height, 0));
+            display.primary = self.xdg.primary_output != null and self.xdg.primary_output.? == output.wlr_output;
+        }
+
+        return snapshot;
+    }
+
+    fn setWorkspaceWrap(self: *Server, enabled: bool) !void {
+        self.settings_prefs.workspace_wrap = enabled;
+        self.xdg.setWorkspaceWrap(enabled);
+        try self.persistSettingsPreferences();
+    }
+
+    fn persistSettingsPreferences(self: *Server) !void {
+        var prefs = Preferences.Preferences{
+            .allocator = self.allocator,
+            .accent = switch (self.settings_prefs.accent) {
+                .aurora => .aurora,
+                .ember => .ember,
+                .moss => .moss,
+            },
+            .reduce_transparency = self.settings_prefs.reduce_transparency,
+            .panel_show_seconds = self.settings_prefs.panel_show_seconds,
+            .panel_show_date = self.settings_prefs.panel_show_date,
+            .workspace_wrap = self.settings_prefs.workspace_wrap,
+            .startup_workspace = self.settings_prefs.startup_workspace,
+        };
+        defer prefs.deinit();
+
+        if (self.wallpaper) |wallpaper| {
+            prefs.wallpaper_path = try self.allocator.dupe(u8, wallpaper.source_path);
+        }
+
+        try prefs.save();
+    }
+
+    fn spawnSettingsApp(self: *Server, page: SettingsPage) void {
+        const exe_dir = std.fs.selfExeDirPathAlloc(self.allocator) catch |err| {
+            log.err("failed to resolve exe dir for settings app: {}", .{err});
+            return;
+        };
+        defer self.allocator.free(exe_dir);
+
+        const settings_path = std.fs.path.join(self.allocator, &.{ exe_dir, "axia-settings" }) catch |err| {
+            log.err("failed to build settings app path: {}", .{err});
+            return;
+        };
+        defer self.allocator.free(settings_path);
+
+        const page_arg = settingsPageArg(page);
+        const argv = self.allocator.alloc([]const u8, 2) catch |err| {
+            log.err("failed to allocate settings argv: {}", .{err});
+            return;
+        };
+        defer self.allocator.free(argv);
+        argv[0] = settings_path;
+        argv[1] = page_arg;
+
+        var env_map = std.process.EnvMap.init(self.allocator);
+        defer env_map.deinit();
+
+        const inherited = std.process.getEnvMap(self.allocator) catch |err| {
+            log.err("failed to read env for settings app: {}", .{err});
+            return;
+        };
+        defer {
+            var copy = inherited;
+            copy.deinit();
+        }
+
+        var it = inherited.iterator();
+        while (it.next()) |entry| {
+            env_map.put(entry.key_ptr.*, entry.value_ptr.*) catch |err| {
+                log.err("failed to copy env for settings app: {}", .{err});
+                return;
+            };
+        }
+
+        env_map.put("WAYLAND_DISPLAY", std.mem.span(self.socket_name)) catch |err| {
+            log.err("failed to set WAYLAND_DISPLAY for settings app: {}", .{err});
+            return;
+        };
+        env_map.put("AXIA_BIN_DIR", exe_dir) catch |err| {
+            log.err("failed to set AXIA_BIN_DIR for settings app: {}", .{err});
+            return;
+        };
+        env_map.put("AXIA_IPC_SOCKET", self.ipc.path()) catch |err| {
+            log.err("failed to set AXIA_IPC_SOCKET for settings app: {}", .{err});
+            return;
+        };
+
+        var child = std.process.Child.init(argv, self.allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Inherit;
+        child.env_map = &env_map;
+        child.spawn() catch |err| {
+            log.err("failed to spawn settings app: {}", .{err});
+        };
+    }
+
+    fn settingsPageArg(page: SettingsPage) []const u8 {
+        return switch (page) {
+            .wallpapers => "wallpapers",
+            .appearance => "appearance",
+            .panel => "panel",
+            .displays => "displays",
+            .workspaces => "workspaces",
+            .network => "network",
+            .bluetooth => "bluetooth",
+            .printers => "printers",
+            .about => "about",
+        };
+    }
+
+    fn copyText(dest: []u8, src: []const u8) usize {
+        const len = @min(dest.len, src.len);
+        @memcpy(dest[0..len], src[0..len]);
+        return len;
     }
 };

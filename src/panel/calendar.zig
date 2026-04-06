@@ -114,9 +114,35 @@ pub fn buildMonthGrid(cursor: MonthCursor, today: DateTime) MonthGrid {
 }
 
 pub fn shortTimestamp(buffer: []u8, now: DateTime) []const u8 {
-    return std.fmt.bufPrint(buffer, "{d} de {s}., {d:0>2}:{d:0>2}", .{
-        now.day(),
-        monthShort(now.month()),
+    return formatTimestamp(buffer, now, true, false);
+}
+
+pub fn formatTimestamp(buffer: []u8, now: DateTime, show_date: bool, show_seconds: bool) []const u8 {
+    if (show_date and show_seconds) {
+        return std.fmt.bufPrint(buffer, "{d} de {s}., {d:0>2}:{d:0>2}:{d:0>2}", .{
+            now.day(),
+            monthShort(now.month()),
+            @as(u8, @intCast(now.tm.tm_hour)),
+            @as(u8, @intCast(now.tm.tm_min)),
+            @as(u8, @intCast(now.tm.tm_sec)),
+        }) catch "Axia";
+    }
+    if (show_date) {
+        return std.fmt.bufPrint(buffer, "{d} de {s}., {d:0>2}:{d:0>2}", .{
+            now.day(),
+            monthShort(now.month()),
+            @as(u8, @intCast(now.tm.tm_hour)),
+            @as(u8, @intCast(now.tm.tm_min)),
+        }) catch "Axia";
+    }
+    if (show_seconds) {
+        return std.fmt.bufPrint(buffer, "{d:0>2}:{d:0>2}:{d:0>2}", .{
+            @as(u8, @intCast(now.tm.tm_hour)),
+            @as(u8, @intCast(now.tm.tm_min)),
+            @as(u8, @intCast(now.tm.tm_sec)),
+        }) catch "Axia";
+    }
+    return std.fmt.bufPrint(buffer, "{d:0>2}:{d:0>2}", .{
         @as(u8, @intCast(now.tm.tm_hour)),
         @as(u8, @intCast(now.tm.tm_min)),
     }) catch "Axia";

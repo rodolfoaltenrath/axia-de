@@ -90,6 +90,11 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const settings_picker_module = b.createModule(.{
+        .root_source_file = b.path("src/settings/file_picker.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const prefs_module = b.createModule(.{
         .root_source_file = b.path("src/config/preferences.zig"),
         .target = target,
@@ -136,6 +141,8 @@ pub fn build(b: *std.Build) void {
 
     panel_exe.linkLibC();
     panel_exe.root_module.addImport("apps_catalog", apps_catalog_module);
+    panel_exe.root_module.addImport("axia_prefs", prefs_module);
+    panel_exe.root_module.addImport("settings_model", settings_model_module);
     panel_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     panel_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     panel_exe.step.dependOn(&gen_layer_shell_client_header.step);
@@ -245,6 +252,7 @@ pub fn build(b: *std.Build) void {
     settings_app_exe.root_module.addImport("client_chrome", client_chrome_module);
     settings_app_exe.root_module.addImport("settings_model", settings_model_module);
     settings_app_exe.root_module.addImport("settings_files", settings_files_module);
+    settings_app_exe.root_module.addImport("settings_picker", settings_picker_module);
     settings_app_exe.root_module.addImport("axia_prefs", prefs_module);
     settings_app_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     settings_app_exe.step.dependOn(&gen_xdg_shell_client_code.step);

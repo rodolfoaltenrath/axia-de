@@ -12,11 +12,11 @@ pub const AppEntry = struct {
 pub const entries = [_]AppEntry{
     .{
         .label = "Terminal",
-        .command = "command -v cosmic-terminal >/dev/null 2>&1 && exec cosmic-terminal || exec alacritty",
+        .command = "exec env SHELL=\"$(command -v fish)\" ghostty --shell-integration=fish",
         .monogram = "T",
         .accent = .{ 0.23, 0.78, 0.72 },
         .subtitle = "Emulador de terminal",
-        .keywords = "shell console bash fish terminal cosmic alacritty",
+        .keywords = "shell console bash fish terminal ghostty",
         .shortcut = "Ctrl + 1",
     },
     .{

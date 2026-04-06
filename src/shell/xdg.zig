@@ -24,6 +24,7 @@ pub const XdgManager = struct {
     focused_view: ?*View = null,
     interactive: InteractiveState = .{},
     workspaces: WorkspaceState = .{},
+    workspace_wrap: bool = true,
     cursor_lx: f64 = 0,
     cursor_ly: f64 = 0,
     next_x: i32 = 48,
@@ -58,6 +59,10 @@ pub const XdgManager = struct {
         return self.workspaces.current;
     }
 
+    pub fn setWorkspaceWrap(self: *XdgManager, enabled: bool) void {
+        self.workspace_wrap = enabled;
+    }
+
     pub fn setUsableArea(self: *XdgManager, usable_area: c.struct_wlr_box) void {
         self.usable_area = usable_area;
         self.next_x = usable_area.x + 32;
@@ -87,7 +92,14 @@ pub const XdgManager = struct {
     }
 
     pub fn cycleWorkspace(self: *XdgManager) void {
-        const active = self.workspaces.next();
+        const active = if (self.workspace_wrap)
+            self.workspaces.next()
+        else blk: {
+            if (self.workspaces.current + 1 < self.workspaces.count) {
+                break :blk self.workspaces.activate(self.workspaces.current + 1);
+            }
+            break :blk self.workspaces.current;
+        };
         self.syncWorkspaceVisibility();
         log.info("workspace {} active", .{active + 1});
     }

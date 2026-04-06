@@ -6,6 +6,8 @@ const ipc = @import("ipc.zig");
 const launcher = @import("launcher.zig");
 const render = @import("render.zig");
 const workspaces = @import("workspaces.zig");
+const prefs = @import("axia_prefs");
+const settings_model = @import("settings_model");
 
 const log = std.log.scoped(.axia_panel);
 const default_output_width: u32 = 1366;
@@ -73,6 +75,7 @@ pub const App = struct {
     pointer_y: f64 = 0,
     pointer_role: ?SurfaceRole = null,
     panel_hovered: render.HoverTarget = .none,
+    preferences: settings_model.PreferencesState = .{},
     panel: SurfaceState = .{ .role = .panel },
     dismiss_overlay: SurfaceState = .{ .role = .dismiss_overlay },
     popup: SurfaceState = .{ .role = .clock_popup },
@@ -110,6 +113,7 @@ pub const App = struct {
             .year = app.now.year(),
             .month = app.now.month(),
         };
+        _ = app.refreshPreferences();
 
         app.registry_listener = .{
             .global = handleGlobal,
@@ -431,9 +435,9 @@ pub const App = struct {
 
         const buffer = &surface.buffer.?;
         switch (surface.role) {
-            .panel => render.drawPanel(buffer.cr, surface.width, surface.height, self.now, self.panel_hovered),
+            .panel => render.drawPanel(buffer.cr, surface.width, surface.height, self.now, self.panel_hovered, self.preferences),
             .dismiss_overlay => drawDismissOverlay(buffer.cr),
-            .clock_popup => render.drawCalendarPopup(buffer.cr, surface.width, surface.height, self.month_cursor, self.now),
+            .clock_popup => render.drawCalendarPopup(buffer.cr, surface.width, surface.height, self.month_cursor, self.now, self.preferences),
             .launcher_popup => launcher.drawPopup(buffer.cr, surface.width, surface.height),
             .workspace_popup => workspaces.drawPopup(buffer.cr, surface.width, surface.height, self.workspace_state),
         }
@@ -460,9 +464,10 @@ pub const App = struct {
     }
 
     fn tickClock(self: *App) void {
+        const prefs_changed = self.refreshPreferences();
         const now = calendar.DateTime.now();
         const new_stamp = now.minuteStamp();
-        if (new_stamp == self.displayed_minute_stamp) return;
+        if (!prefs_changed and !self.preferences.panel_show_seconds and new_stamp == self.displayed_minute_stamp) return;
 
         self.now = now;
         self.displayed_minute_stamp = new_stamp;
@@ -471,6 +476,16 @@ pub const App = struct {
         if (self.clock_popup_visible) self.popup.dirty = true;
         if (self.launcher_popup_visible) self.launcher_popup.dirty = true;
         if (self.workspace_popup_visible) self.workspace_popup.dirty = true;
+    }
+
+    fn refreshPreferences(self: *App) bool {
+        var loaded = prefs.load(self.allocator) catch return false;
+        defer loaded.deinit();
+
+        const next = preferencesStateFromStored(loaded);
+        if (preferencesEqual(self.preferences, next)) return false;
+        self.preferences = next;
+        return true;
     }
 
     fn setSeat(self: *App, seat: *c.struct_wl_seat) void {
@@ -804,4 +819,28 @@ fn drawDismissOverlay(cr: *c.cairo_t) void {
     c.cairo_set_source_rgba(cr, 0, 0, 0, 0);
     c.cairo_paint(cr);
     c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
+}
+
+fn preferencesEqual(a: settings_model.PreferencesState, b: settings_model.PreferencesState) bool {
+    return a.accent == b.accent and
+        a.reduce_transparency == b.reduce_transparency and
+        a.panel_show_seconds == b.panel_show_seconds and
+        a.panel_show_date == b.panel_show_date and
+        a.workspace_wrap == b.workspace_wrap and
+        a.startup_workspace == b.startup_workspace;
+}
+
+fn preferencesStateFromStored(stored: prefs.Preferences) settings_model.PreferencesState {
+    return .{
+        .accent = switch (stored.accent) {
+            .aurora => .aurora,
+            .ember => .ember,
+            .moss => .moss,
+        },
+        .reduce_transparency = stored.reduce_transparency,
+        .panel_show_seconds = stored.panel_show_seconds,
+        .panel_show_date = stored.panel_show_date,
+        .workspace_wrap = stored.workspace_wrap,
+        .startup_workspace = stored.startup_workspace,
+    };
 }

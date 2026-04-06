@@ -1,3 +1,5 @@
+const default_workspace_count: usize = 4;
+
 pub const Page = enum {
     wallpapers,
     appearance,
@@ -9,6 +11,61 @@ pub const Page = enum {
     printers,
     about,
 };
+
+pub const AccentPreset = enum {
+    aurora,
+    ember,
+    moss,
+};
+
+pub const PreferencesState = struct {
+    accent: AccentPreset = .aurora,
+    reduce_transparency: bool = false,
+    panel_show_seconds: bool = false,
+    panel_show_date: bool = true,
+    workspace_wrap: bool = true,
+    startup_workspace: usize = 0,
+};
+
+pub const AccentSpec = struct {
+    preset: AccentPreset,
+    label: []const u8,
+    description: []const u8,
+    primary: [3]f64,
+    secondary: [3]f64,
+};
+
+pub const accent_presets = [_]AccentSpec{
+    .{
+        .preset = .aurora,
+        .label = "Aurora",
+        .description = "Ciano frio e brilho oceânico.",
+        .primary = .{ 0.34, 0.86, 0.98 },
+        .secondary = .{ 0.16, 0.48, 0.66 },
+    },
+    .{
+        .preset = .ember,
+        .label = "Ember",
+        .description = "Âmbar quente com contraste forte.",
+        .primary = .{ 0.98, 0.70, 0.30 },
+        .secondary = .{ 0.56, 0.24, 0.10 },
+    },
+    .{
+        .preset = .moss,
+        .label = "Moss",
+        .description = "Verde suave para um desktop mais calmo.",
+        .primary = .{ 0.56, 0.90, 0.62 },
+        .secondary = .{ 0.18, 0.42, 0.26 },
+    },
+};
+
+pub fn accentSpec(preset: AccentPreset) AccentSpec {
+    return switch (preset) {
+        .aurora => accent_presets[0],
+        .ember => accent_presets[1],
+        .moss => accent_presets[2],
+    };
+}
 
 pub const WallpaperPreset = struct {
     label: []const u8,
@@ -48,4 +105,48 @@ pub const wallpaper_presets = [_]WallpaperPreset{
             .{ 0.72, 0.89, 0.96, 1.0 },
         },
     },
+};
+
+pub const DisplayInfo = struct {
+    name: [48]u8 = [_]u8{0} ** 48,
+    name_len: usize = 0,
+    width: u32 = 0,
+    height: u32 = 0,
+    primary: bool = false,
+
+    pub fn nameText(self: *const DisplayInfo) []const u8 {
+        return self.name[0..self.name_len];
+    }
+};
+
+pub const RuntimeState = struct {
+    display_count: usize = 0,
+    displays: [4]DisplayInfo = [_]DisplayInfo{.{}} ** 4,
+    workspace_current: usize = 0,
+    workspace_count: usize = default_workspace_count,
+    socket_name: [64]u8 = [_]u8{0} ** 64,
+    socket_name_len: usize = 0,
+
+    pub fn socketNameText(self: *const RuntimeState) []const u8 {
+        return self.socket_name[0..self.socket_name_len];
+    }
+};
+
+pub const Hit = union(enum) {
+    none,
+    titlebar,
+    minimize,
+    maximize,
+    close,
+    nav: Page,
+    wallpaper_preset: usize,
+    browser_manual,
+    accent_preset: AccentPreset,
+    reduce_transparency,
+    panel_show_seconds,
+    panel_show_date,
+    workspace_wrap,
+    startup_workspace: usize,
+    scroll_thumb,
+    scroll_track,
 };

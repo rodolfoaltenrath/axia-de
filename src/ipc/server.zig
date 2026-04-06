@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("../wl.zig").c;
 const default_workspace_count = @import("../shell/workspace.zig").default_workspace_count;
+const settings_model = @import("../settings/model.zig");
 
 pub const WorkspaceState = struct {
     current: usize,
@@ -25,6 +26,8 @@ pub const ActivateWorkspaceCallback = *const fn (?*anyopaque, usize) void;
 pub const MoveFocusedWorkspaceCallback = *const fn (?*anyopaque, usize) void;
 pub const SetWallpaperCallback = *const fn (?*anyopaque, []const u8) void;
 pub const ToggleLauncherCallback = *const fn (?*anyopaque) void;
+pub const GetRuntimeStateCallback = *const fn (?*anyopaque) settings_model.RuntimeState;
+pub const SetWorkspaceWrapCallback = *const fn (?*anyopaque, bool) void;
 
 pub const IpcServer = struct {
     allocator: std.mem.Allocator,
@@ -38,6 +41,8 @@ pub const IpcServer = struct {
     move_focused_workspace_cb: ?MoveFocusedWorkspaceCallback = null,
     set_wallpaper_cb: ?SetWallpaperCallback = null,
     toggle_launcher_cb: ?ToggleLauncherCallback = null,
+    get_runtime_state_cb: ?GetRuntimeStateCallback = null,
+    set_workspace_wrap_cb: ?SetWorkspaceWrapCallback = null,
 
     pub fn init(allocator: std.mem.Allocator) IpcServer {
         return .{ .allocator = allocator };
@@ -75,6 +80,8 @@ pub const IpcServer = struct {
         move_focused_workspace_cb: MoveFocusedWorkspaceCallback,
         set_wallpaper_cb: SetWallpaperCallback,
         toggle_launcher_cb: ToggleLauncherCallback,
+        get_runtime_state_cb: GetRuntimeStateCallback,
+        set_workspace_wrap_cb: SetWorkspaceWrapCallback,
     ) void {
         self.ctx = ctx;
         self.get_workspace_state_cb = get_workspace_state_cb;
@@ -82,6 +89,8 @@ pub const IpcServer = struct {
         self.move_focused_workspace_cb = move_focused_workspace_cb;
         self.set_wallpaper_cb = set_wallpaper_cb;
         self.toggle_launcher_cb = toggle_launcher_cb;
+        self.get_runtime_state_cb = get_runtime_state_cb;
+        self.set_workspace_wrap_cb = set_workspace_wrap_cb;
     }
 
     pub fn deinit(self: *IpcServer) void {
@@ -174,6 +183,21 @@ pub const IpcServer = struct {
             return;
         }
 
+        if (std.mem.eql(u8, request, "runtime get")) {
+            self.writeRuntimeState(client_fd);
+            return;
+        }
+
+        if (std.mem.startsWith(u8, request, "workspace wrap ")) {
+            const raw_enabled = std.mem.trim(u8, request["workspace wrap ".len..], " \r\n\t");
+            const enabled = std.mem.eql(u8, raw_enabled, "1") or std.ascii.eqlIgnoreCase(raw_enabled, "true");
+            if (self.set_workspace_wrap_cb) |callback| {
+                callback(self.ctx, enabled);
+            }
+            _ = std.posix.write(client_fd, "ok\n") catch {};
+            return;
+        }
+
         _ = std.posix.write(client_fd, "error unknown-command\n") catch {};
     }
 
@@ -193,6 +217,32 @@ pub const IpcServer = struct {
             writer.print(
                 "ws {} {} {} {s}\n",
                 .{ index, summary.window_count, @intFromBool(summary.focused), summary.preview[0..summary.preview_len] },
+            ) catch return;
+        }
+
+        _ = std.posix.write(client_fd, stream.getWritten()) catch {};
+    }
+
+    fn writeRuntimeState(self: *IpcServer, client_fd: std.posix.socket_t) void {
+        const state = if (self.get_runtime_state_cb) |callback|
+            callback(self.ctx)
+        else
+            settings_model.RuntimeState{};
+
+        var response: [2048]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&response);
+        const writer = stream.writer();
+
+        writer.print(
+            "ok runtime {} {} {} {s}\n",
+            .{ state.workspace_current, state.workspace_count, state.display_count, state.socketNameText() },
+        ) catch return;
+
+        for (0..state.display_count) |index| {
+            const display = state.displays[index];
+            writer.print(
+                "display {} {} {} {} {s}\n",
+                .{ index, display.width, display.height, @intFromBool(display.primary), display.nameText() },
             ) catch return;
         }
 

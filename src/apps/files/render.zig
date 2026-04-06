@@ -38,6 +38,7 @@ pub fn draw(
     hovered: Hit,
     sidebar_collapsed: bool,
     sidebar_icons: *const icons.SidebarIcons,
+    picker_mode: bool,
 ) void {
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
@@ -52,9 +53,9 @@ pub fn draw(
     const content = contentRect(width, height, sidebar_collapsed);
 
     _ = root;
-    drawTitlebar(cr, width, height, hovered, sidebar_collapsed);
+    drawTitlebar(cr, width, height, hovered, sidebar_collapsed, picker_mode);
     drawSidebar(cr, sidebar, snapshot, hovered, sidebar_collapsed, sidebar_icons);
-    drawContent(cr, width, height, content, snapshot, hovered, sidebar_collapsed);
+    drawContent(cr, width, height, content, snapshot, hovered, sidebar_collapsed, picker_mode);
 }
 
 pub fn hitTest(
@@ -180,9 +181,9 @@ fn entryRect(width: u32, height: u32, index: usize, collapsed: bool) Rect {
     };
 }
 
-fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, hovered: Hit, sidebar_collapsed: bool) void {
+fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, hovered: Hit, sidebar_collapsed: bool, picker_mode: bool) void {
     chrome.drawWindowShell(cr, width, height, .{
-        .title = "Arquivos",
+        .title = if (picker_mode) "Selecionar Wallpaper" else "Arquivos",
         .title_x = 86,
     }, hoveredControl(hovered));
     drawTopGlyphButton(cr, toggleSidebarRect(), "=", hovered == .toggle_sidebar);
@@ -239,12 +240,14 @@ fn drawContent(
     snapshot: browser.Snapshot,
     hovered: Hit,
     sidebar_collapsed: bool,
+    picker_mode: bool,
 ) void {
     drawToolbarButton(cr, previousRect(width, height, sidebar_collapsed), "<", hovered == .previous);
     drawToolbarButton(cr, nextRect(width, height, sidebar_collapsed), ">", hovered == .next);
     drawToolbarButton(cr, upRect(width, height, sidebar_collapsed), "^", hovered == .up);
 
     drawBreadcrumb(cr, content, snapshot.current_dir);
+    if (picker_mode) drawPickerHint(cr, content);
 
     const header_y = content.y + top_strip_height;
     const footer_y = content.y + content.height - footer_height;
@@ -256,7 +259,7 @@ fn drawContent(
     drawColumnHeaders(cr, content, header_y, snapshot.modified_descending, hovered == .sort_modified);
 
     if (snapshot.count == 0) {
-        drawEmptyState(cr, content);
+        drawEmptyState(cr, content, picker_mode);
     } else {
         const rows_top = header_y + table_header_height;
         c.cairo_save(cr);
@@ -296,10 +299,23 @@ fn drawContent(
 
     var footer_buf: [96]u8 = undefined;
     const footer = if (snapshot.total_count == 0)
-        "Pasta vazia"
+        (if (picker_mode) "Nenhuma imagem nesta pasta" else "Pasta vazia")
     else
         std.fmt.bufPrint(&footer_buf, "{d} itens", .{snapshot.total_count}) catch "Itens";
     drawLabel(cr, content.x, footer_y + 22, 13, footer, 0.78, 0.79, 0.82);
+}
+
+fn drawPickerHint(cr: *c.cairo_t, content: Rect) void {
+    const rect = Rect{
+        .x = content.x + 376,
+        .y = content.y + 10,
+        .width = content.width - 376,
+        .height = 32,
+    };
+    drawRoundedRect(cr, rect, 10);
+    c.cairo_set_source_rgba(cr, 0.18, 0.66, 0.84, 0.18);
+    c.cairo_fill(cr);
+    drawLabel(cr, rect.x + 14, rect.y + 21, 12.5, "Clique numa imagem para aplicar como wallpaper.", 0.82, 0.93, 0.97);
 }
 
 fn drawBreadcrumb(cr: *c.cairo_t, content: Rect, current_dir: []const u8) void {
@@ -371,7 +387,7 @@ fn drawEntryRow(
     c.cairo_fill(cr);
 }
 
-fn drawEmptyState(cr: *c.cairo_t, content: Rect) void {
+fn drawEmptyState(cr: *c.cairo_t, content: Rect, picker_mode: bool) void {
     const center = Rect{
         .x = content.x + (content.width - 180) / 2.0,
         .y = content.y + 150,
@@ -390,7 +406,7 @@ fn drawEmptyState(cr: *c.cairo_t, content: Rect) void {
         .y = center.y + 72,
         .width = center.width,
         .height = 26,
-    }, 16, "Pasta vazia", 0.90, 0.91, 0.94);
+    }, 16, if (picker_mode) "Sem imagens aqui" else "Pasta vazia", 0.90, 0.91, 0.94);
 }
 
 fn drawFolderGlyph(cr: *c.cairo_t, rect: Rect) void {
