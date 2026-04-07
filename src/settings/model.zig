@@ -4,6 +4,7 @@ pub const Page = enum {
     wallpapers,
     appearance,
     panel,
+    dock,
     displays,
     workspaces,
     network,
@@ -18,13 +19,47 @@ pub const AccentPreset = enum {
     moss,
 };
 
+pub const DockSizePreset = enum {
+    compact,
+    comfortable,
+    large,
+};
+
+pub const DockIconSizePreset = enum {
+    small,
+    medium,
+    large,
+};
+
 pub const PreferencesState = struct {
     accent: AccentPreset = .aurora,
     reduce_transparency: bool = false,
     panel_show_seconds: bool = false,
     panel_show_date: bool = true,
+    dock_size: DockSizePreset = .comfortable,
+    dock_icon_size: DockIconSizePreset = .medium,
+    dock_auto_hide: bool = false,
+    dock_strong_hover: bool = false,
     workspace_wrap: bool = true,
     startup_workspace: usize = 0,
+};
+
+pub const dock_size_options = [_]struct {
+    preset: DockSizePreset,
+    label: []const u8,
+}{
+    .{ .preset = .compact, .label = "Compacta" },
+    .{ .preset = .comfortable, .label = "Normal" },
+    .{ .preset = .large, .label = "Grande" },
+};
+
+pub const dock_icon_size_options = [_]struct {
+    preset: DockIconSizePreset,
+    label: []const u8,
+}{
+    .{ .preset = .small, .label = "Pequenos" },
+    .{ .preset = .medium, .label = "Médios" },
+    .{ .preset = .large, .label = "Grandes" },
 };
 
 pub const AccentSpec = struct {
@@ -163,6 +198,10 @@ pub const Hit = union(enum) {
     reduce_transparency,
     panel_show_seconds,
     panel_show_date,
+    dock_size: DockSizePreset,
+    dock_icon_size: DockIconSizePreset,
+    dock_auto_hide,
+    dock_strong_hover,
     workspace_wrap,
     startup_workspace: usize,
     scroll_thumb,

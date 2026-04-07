@@ -94,7 +94,7 @@ pub fn drawPanel(cr: *c.cairo_t, state: State) void {
 
     switch (state.page) {
         .wallpapers => drawWallpaperPage(cr, state),
-        .appearance, .panel, .displays, .workspaces, .network, .bluetooth, .printers, .about => drawPlaceholderPage(cr, state.page),
+        .appearance, .panel, .dock, .displays, .workspaces, .network, .bluetooth, .printers, .about => drawPlaceholderPage(cr, state.page),
     }
 }
 
@@ -138,6 +138,7 @@ fn drawPlaceholderPage(cr: *c.cairo_t, page: model.Page) void {
     const label = switch (page) {
         .appearance => "Esta tela será a próxima da fila.",
         .panel => "Aqui vamos configurar painel, relógio e launcher.",
+        .dock => "Aqui vamos configurar tamanho, ícones e comportamento da dock.",
         .displays => "Aqui vamos ajustar monitores e escala.",
         .workspaces => "Aqui vamos configurar áreas de trabalho.",
         .network => "Aqui vamos gerenciar Wi‑Fi, Ethernet e conexões.",
@@ -155,6 +156,7 @@ fn pageText(page: model.Page) struct { []const u8, []const u8 } {
         .wallpapers => .{ "Papel de Parede", "Biblioteca inicial de wallpapers do Axia-DE" },
         .appearance => .{ "Aparência", "Cores, contraste e polimento visual do desktop" },
         .panel => .{ "Painel Superior", "Organização, widgets e comportamento do topo" },
+        .dock => .{ "Dock", "Tamanho, ícones e comportamento da barra inferior" },
         .displays => .{ "Monitores", "Saídas, escala e posicionamento de telas" },
         .workspaces => .{ "Áreas de Trabalho", "Fluxo entre espaços e comportamento das janelas" },
         .network => .{ "Rede", "Wi‑Fi, Ethernet e conectividade do desktop" },

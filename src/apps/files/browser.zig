@@ -232,6 +232,19 @@ pub const Browser = struct {
         self.sortEntries();
     }
 
+    pub fn scrollLines(self: *Browser, delta: isize) void {
+        if (delta == 0) return;
+        const max_start = self.maxPageStart();
+        if (delta > 0) {
+            const next = self.page_start + @as(usize, @intCast(delta));
+            self.page_start = @min(next, max_start);
+            return;
+        }
+
+        const amount: usize = @intCast(-delta);
+        self.page_start = self.page_start -| amount;
+    }
+
     pub fn visibleEntry(self: *Browser, visible_index: usize) ?Entry {
         const index = self.page_start + visible_index;
         if (index >= self.entries.items.len) return null;
@@ -320,6 +333,11 @@ pub const Browser = struct {
         if (self.page_start >= self.entries.items.len and self.entries.items.len > 0) {
             self.page_start = ((self.entries.items.len - 1) / visible_entry_count) * visible_entry_count;
         }
+    }
+
+    fn maxPageStart(self: *const Browser) usize {
+        if (self.entries.items.len <= visible_entry_count) return 0;
+        return self.entries.items.len - visible_entry_count;
     }
 };
 

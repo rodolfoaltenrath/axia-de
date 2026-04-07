@@ -14,6 +14,8 @@ const top_strip_height = 56.0;
 const table_header_height = 34.0;
 const footer_height = 34.0;
 const row_height = 40.0;
+const scrollbar_width = 8.0;
+const scrollbar_gap = 8.0;
 
 pub const Hit = union(enum) {
     none,
@@ -94,6 +96,20 @@ pub fn hitTest(
 
     if (titlebarDragRect(width, height).contains(x, y)) return .titlebar;
     return .none;
+}
+
+pub fn scrollRegionRect(width: u32, height: u32, collapsed: bool) Rect {
+    const content = contentRect(width, height, collapsed);
+    const header_y = content.y + top_strip_height;
+    const footer_y = content.y + content.height - footer_height;
+    const rows_top = header_y + table_header_height;
+    const rows_bottom = footer_y - 6;
+    return .{
+        .x = content.x,
+        .y = rows_top,
+        .width = content.width,
+        .height = rows_bottom - rows_top,
+    };
 }
 
 fn rootRect(width: u32, height: u32) Rect {
@@ -185,11 +201,11 @@ fn openSelectedRect(width: u32, height: u32, collapsed: bool) Rect {
 }
 
 fn entryRect(width: u32, height: u32, index: usize, collapsed: bool) Rect {
-    const content = contentRect(width, height, collapsed);
+    const rows = scrollRegionRect(width, height, collapsed);
     return .{
-        .x = content.x,
-        .y = content.y + top_strip_height + table_header_height + @as(f64, @floatFromInt(index)) * row_height,
-        .width = content.width,
+        .x = rows.x,
+        .y = rows.y + @as(f64, @floatFromInt(index)) * row_height,
+        .width = rows.width - scrollbarReserve(),
         .height = row_height,
     };
 }
@@ -273,7 +289,6 @@ fn drawContent(
 
     const header_y = content.y + top_strip_height;
     const footer_y = content.y + content.height - footer_height;
-    const rows_bottom = footer_y - 6;
     c.cairo_rectangle(cr, content.x, header_y, content.width, 1);
     c.cairo_set_source_rgba(cr, 0.31, 0.94, 1.0, 0.85);
     c.cairo_fill(cr);
@@ -283,15 +298,15 @@ fn drawContent(
     if (snapshot.count == 0) {
         drawEmptyState(cr, content, picker_mode);
     } else {
-        const rows_top = header_y + table_header_height;
+        const rows_area = scrollRegionRect(width, height, sidebar_collapsed);
         c.cairo_save(cr);
-        c.cairo_rectangle(cr, content.x, rows_top, content.width, rows_bottom - rows_top);
+        c.cairo_rectangle(cr, rows_area.x, rows_area.y, rows_area.width, rows_area.height);
         c.cairo_clip(cr);
         for (0..snapshot.count) |index| {
             const rect = Rect{
-                .x = content.x,
-                .y = rows_top + @as(f64, @floatFromInt(index)) * row_height,
-                .width = content.width,
+                .x = rows_area.x,
+                .y = rows_area.y + @as(f64, @floatFromInt(index)) * row_height,
+                .width = rows_area.width - scrollbarReserve(),
                 .height = row_height,
             };
             const hovered_entry = switch (hovered) {
@@ -310,6 +325,7 @@ fn drawContent(
             );
         }
         c.cairo_restore(cr);
+        drawScrollbar(cr, rows_area, snapshot);
     }
 
     c.cairo_rectangle(cr, content.x, footer_y, content.width, footer_height);
@@ -326,6 +342,35 @@ fn drawContent(
     else
         std.fmt.bufPrint(&footer_buf, "{d} itens", .{snapshot.total_count}) catch "Itens";
     drawLabel(cr, content.x, footer_y + 22, 13, footer, 0.78, 0.79, 0.82);
+}
+
+fn drawScrollbar(cr: *c.cairo_t, rows_area: Rect, snapshot: browser.Snapshot) void {
+    if (snapshot.total_count <= snapshot.count or snapshot.count == 0) return;
+
+    const track = Rect{
+        .x = rows_area.x + rows_area.width - scrollbar_width,
+        .y = rows_area.y + 4,
+        .width = scrollbar_width,
+        .height = rows_area.height - 8,
+    };
+    drawRoundedRect(cr, track, scrollbar_width / 2.0);
+    c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
+    c.cairo_fill(cr);
+
+    const visible_ratio = @as(f64, @floatFromInt(snapshot.count)) / @as(f64, @floatFromInt(snapshot.total_count));
+    const thumb_height = @max(30.0, track.height * visible_ratio);
+    const max_start = @max(snapshot.total_count - snapshot.count, 1);
+    const progress = @as(f64, @floatFromInt(snapshot.page_start)) / @as(f64, @floatFromInt(max_start));
+    const thumb_y = track.y + (track.height - thumb_height) * progress;
+    const thumb = Rect{
+        .x = track.x,
+        .y = thumb_y,
+        .width = track.width,
+        .height = thumb_height,
+    };
+    drawRoundedRect(cr, thumb, scrollbar_width / 2.0);
+    c.cairo_set_source_rgba(cr, 0.42, 0.88, 0.98, 0.50);
+    c.cairo_fill(cr);
 }
 
 fn drawPickerHint(cr: *c.cairo_t, content: Rect) void {
@@ -351,7 +396,7 @@ fn drawBreadcrumb(cr: *c.cairo_t, content: Rect, current_dir: []const u8) void {
 fn drawColumnHeaders(cr: *c.cairo_t, content: Rect, header_y: f64, modified_descending: bool, modified_hovered: bool) void {
     const name_x = content.x + 10;
     const modified_x = content.x + content.width * 0.46;
-    const size_x = content.x + content.width * 0.80;
+    const size_x = content.x + content.width * 0.80 - scrollbarReserve();
     drawLabel(cr, name_x, header_y + 24, 14, "Nome", 0.95, 0.95, 0.96);
 
     if (modified_hovered) {
@@ -371,6 +416,10 @@ fn drawColumnHeaders(cr: *c.cairo_t, content: Rect, header_y: f64, modified_desc
     c.cairo_rectangle(cr, content.x, header_y + table_header_height - 1, content.width, 1);
     c.cairo_set_source_rgba(cr, 1, 1, 1, 0.08);
     c.cairo_fill(cr);
+}
+
+fn scrollbarReserve() f64 {
+    return scrollbar_width + scrollbar_gap;
 }
 
 fn drawEntryRow(

@@ -13,6 +13,8 @@ pub const ShmBuffer = struct {
     buffer: *c.struct_wl_buffer,
     surface: *c.cairo_surface_t,
     cr: *c.cairo_t,
+    busy: bool = false,
+    listener: c.struct_wl_buffer_listener = undefined,
 
     pub fn init(shm: *c.struct_wl_shm, width: u32, height: u32) !ShmBuffer {
         const stride = width * 4;
@@ -86,5 +88,22 @@ pub const ShmBuffer = struct {
         c.wl_shm_pool_destroy(self.pool);
         std.posix.munmap(self.memory);
         std.posix.close(self.fd);
+    }
+
+    pub fn markBusy(self: *ShmBuffer) void {
+        self.busy = true;
+    }
+
+    pub fn installListener(self: *ShmBuffer) void {
+        self.listener = .{
+            .release = handleRelease,
+        };
+        _ = c.wl_buffer_add_listener(self.buffer, &self.listener, self);
+    }
+
+    fn handleRelease(data: ?*anyopaque, _: ?*c.struct_wl_buffer) callconv(.c) void {
+        const raw_buffer = data orelse return;
+        const buffer: *ShmBuffer = @ptrCast(@alignCast(raw_buffer));
+        buffer.busy = false;
     }
 };

@@ -31,6 +31,7 @@ pub const SetWorkspaceWrapCallback = *const fn (?*anyopaque, bool) void;
 pub const FocusAppCallback = *const fn (?*anyopaque, []const u8) bool;
 pub const ShowPreviewCallback = *const fn (?*anyopaque, []const u8, i32) void;
 pub const HidePreviewCallback = *const fn (?*anyopaque) void;
+pub const UpdateDockGlassCallback = *const fn (?*anyopaque, c.struct_wlr_box, i32) void;
 
 pub const IpcServer = struct {
     allocator: std.mem.Allocator,
@@ -49,6 +50,7 @@ pub const IpcServer = struct {
     focus_app_cb: ?FocusAppCallback = null,
     show_preview_cb: ?ShowPreviewCallback = null,
     hide_preview_cb: ?HidePreviewCallback = null,
+    update_dock_glass_cb: ?UpdateDockGlassCallback = null,
 
     pub fn init(allocator: std.mem.Allocator) IpcServer {
         return .{ .allocator = allocator };
@@ -91,6 +93,7 @@ pub const IpcServer = struct {
         focus_app_cb: FocusAppCallback,
         show_preview_cb: ShowPreviewCallback,
         hide_preview_cb: HidePreviewCallback,
+        update_dock_glass_cb: UpdateDockGlassCallback,
     ) void {
         self.ctx = ctx;
         self.get_workspace_state_cb = get_workspace_state_cb;
@@ -103,6 +106,7 @@ pub const IpcServer = struct {
         self.focus_app_cb = focus_app_cb;
         self.show_preview_cb = show_preview_cb;
         self.hide_preview_cb = hide_preview_cb;
+        self.update_dock_glass_cb = update_dock_glass_cb;
     }
 
     pub fn deinit(self: *IpcServer) void {
@@ -246,6 +250,59 @@ pub const IpcServer = struct {
         if (std.mem.eql(u8, request, "preview hide")) {
             if (self.hide_preview_cb) |callback| {
                 callback(self.ctx);
+            }
+            _ = std.posix.write(client_fd, "ok\n") catch {};
+            return;
+        }
+
+        if (std.mem.startsWith(u8, request, "dock glass ")) {
+            const payload = std.mem.trim(u8, request["dock glass ".len..], " \r\n\t");
+            var parts = std.mem.tokenizeAny(u8, payload, " ");
+            const raw_x = parts.next() orelse {
+                _ = std.posix.write(client_fd, "error invalid-dock-glass\n") catch {};
+                return;
+            };
+            const raw_y = parts.next() orelse {
+                _ = std.posix.write(client_fd, "error invalid-dock-glass\n") catch {};
+                return;
+            };
+            const raw_w = parts.next() orelse {
+                _ = std.posix.write(client_fd, "error invalid-dock-glass\n") catch {};
+                return;
+            };
+            const raw_h = parts.next() orelse {
+                _ = std.posix.write(client_fd, "error invalid-dock-glass\n") catch {};
+                return;
+            };
+            const raw_surface_h = parts.next() orelse {
+                _ = std.posix.write(client_fd, "error invalid-dock-glass\n") catch {};
+                return;
+            };
+
+            const rect = c.struct_wlr_box{
+                .x = std.fmt.parseInt(i32, raw_x, 10) catch {
+                    _ = std.posix.write(client_fd, "error invalid-dock-glass\n") catch {};
+                    return;
+                },
+                .y = std.fmt.parseInt(i32, raw_y, 10) catch {
+                    _ = std.posix.write(client_fd, "error invalid-dock-glass\n") catch {};
+                    return;
+                },
+                .width = std.fmt.parseInt(i32, raw_w, 10) catch {
+                    _ = std.posix.write(client_fd, "error invalid-dock-glass\n") catch {};
+                    return;
+                },
+                .height = std.fmt.parseInt(i32, raw_h, 10) catch {
+                    _ = std.posix.write(client_fd, "error invalid-dock-glass\n") catch {};
+                    return;
+                },
+            };
+            const surface_height = std.fmt.parseInt(i32, raw_surface_h, 10) catch {
+                _ = std.posix.write(client_fd, "error invalid-dock-glass\n") catch {};
+                return;
+            };
+            if (self.update_dock_glass_cb) |callback| {
+                callback(self.ctx, rect, surface_height);
             }
             _ = std.posix.write(client_fd, "ok\n") catch {};
             return;

@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("wl.zig").c;
 const dock_icons = @import("icons.zig");
 const dock_ipc = @import("ipc.zig");
+const dock_style = @import("style.zig");
 const runtime_catalog = @import("runtime_catalog");
 
 pub const Rect = struct {
@@ -15,42 +16,51 @@ pub const Rect = struct {
     }
 };
 
-pub const surface_height: u32 = 66;
-
-const item_size: f64 = 40;
-const item_gap: f64 = 6;
-const dock_padding_x: f64 = 14;
-const dock_padding_y: f64 = 6;
-
-pub fn containerRect(width: u32, height: u32, entries: []const runtime_catalog.AppEntry) Rect {
+pub fn containerRect(width: u32, height: u32, entries: []const runtime_catalog.AppEntry, style: dock_style.Style, offset_y: f64) Rect {
     const count = @max(entries.len, 1);
-    const total_items_width = @as(f64, @floatFromInt(entries.len)) * item_size;
-    const total_gap_width = @as(f64, @floatFromInt(count - 1)) * item_gap;
-    const dock_width = dock_padding_x * 2.0 + total_items_width + total_gap_width;
-    const dock_height = item_size + dock_padding_y * 2.0;
+    const total_items_width = @as(f64, @floatFromInt(entries.len)) * style.item_size;
+    const total_gap_width = @as(f64, @floatFromInt(count - 1)) * style.item_gap;
+    const dock_width = style.padding_x * 2.0 + total_items_width + total_gap_width;
+    const dock_height = style.dockHeight();
     return .{
         .x = (@as(f64, @floatFromInt(width)) - dock_width) / 2.0,
-        .y = @as(f64, @floatFromInt(height)) - dock_height - 10,
+        .y = @as(f64, @floatFromInt(height)) - dock_height - style.bottom_margin + offset_y,
         .width = dock_width,
         .height = dock_height,
     };
 }
 
-pub fn itemRect(width: u32, height: u32, entries: []const runtime_catalog.AppEntry, index: usize) Rect {
-    const container = containerRect(width, height, entries);
+pub fn itemRect(width: u32, height: u32, entries: []const runtime_catalog.AppEntry, style: dock_style.Style, offset_y: f64, index: usize) Rect {
+    const container = containerRect(width, height, entries, style, offset_y);
     return .{
-        .x = container.x + dock_padding_x + @as(f64, @floatFromInt(index)) * (item_size + item_gap),
-        .y = container.y + dock_padding_y,
-        .width = item_size,
-        .height = item_size,
+        .x = container.x + style.padding_x + @as(f64, @floatFromInt(index)) * (style.item_size + style.item_gap),
+        .y = container.y + style.padding_y,
+        .width = style.item_size,
+        .height = style.item_size,
     };
 }
 
-pub fn hitTest(width: u32, height: u32, x: f64, y: f64, entries: []const runtime_catalog.AppEntry) ?usize {
+pub fn hitTest(width: u32, height: u32, x: f64, y: f64, entries: []const runtime_catalog.AppEntry, style: dock_style.Style, offset_y: f64) ?usize {
     for (entries, 0..) |_, index| {
-        if (itemRect(width, height, entries, index).contains(x, y)) return index;
+        if (itemRect(width, height, entries, style, offset_y, index).contains(x, y)) return index;
     }
     return null;
+}
+
+pub fn visibleContainerRect(width: u32, height: u32, entries: []const runtime_catalog.AppEntry, style: dock_style.Style, offset_y: f64) ?Rect {
+    const rect = containerRect(width, height, entries, style, offset_y);
+    const bounds = Rect{ .x = 0, .y = 0, .width = @floatFromInt(width), .height = @floatFromInt(height) };
+    const x1 = @max(rect.x, bounds.x);
+    const y1 = @max(rect.y, bounds.y);
+    const x2 = @min(rect.x + rect.width, bounds.x + bounds.width);
+    const y2 = @min(rect.y + rect.height, bounds.y + bounds.height);
+    if (x2 <= x1 or y2 <= y1) return null;
+    return .{
+        .x = x1,
+        .y = y1,
+        .width = x2 - x1,
+        .height = y2 - y1,
+    };
 }
 
 pub fn drawDock(
@@ -61,6 +71,8 @@ pub fn drawDock(
     open_apps: []const dock_ipc.OpenAppInfo,
     icons: *const dock_icons.IconCache,
     hovered_index: ?usize,
+    style: dock_style.Style,
+    offset_y: f64,
 ) void {
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
@@ -70,34 +82,39 @@ pub fn drawDock(
     c.cairo_paint(cr);
     c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
 
-    const container = containerRect(width, height, entries);
+    const container = containerRect(width, height, entries, style, offset_y);
+    const reveal = revealAmount(style, offset_y);
     const shadow_rect = Rect{
-        .x = container.x,
-        .y = container.y + 6,
-        .width = container.width,
+        .x = container.x + 2,
+        .y = container.y + 4,
+        .width = container.width - 4,
         .height = container.height,
     };
-    drawRoundedRect(cr, shadow_rect, 18);
-    c.cairo_set_source_rgba(cr, 0.02, 0.03, 0.05, 0.20);
-    c.cairo_fill(cr);
+    if (reveal > 0.06) {
+        drawRoundedRect(cr, shadow_rect, style.corner_radius);
+        c.cairo_set_source_rgba(cr, 0.02, 0.03, 0.05, style.shadow_alpha * reveal * reveal);
+        c.cairo_fill(cr);
+    }
 
-    drawRoundedRect(cr, container, 18);
-    c.cairo_set_source_rgba(cr, 0.096, 0.102, 0.128, 0.78);
+    drawRoundedRect(cr, container, style.corner_radius);
+    c.cairo_set_source_rgba(cr, 0.096, 0.102, 0.128, lerp(style.shell_fill_alpha * 0.22, style.shell_fill_alpha, reveal));
     c.cairo_fill_preserve(cr);
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.10);
-    c.cairo_set_line_width(cr, 1);
-    c.cairo_stroke(cr);
+    if (reveal > 0.18) {
+        c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.12 * reveal);
+        c.cairo_set_line_width(cr, 1);
+        c.cairo_stroke(cr);
+    } else {
+        c.cairo_new_path(cr);
+    }
 
-    c.cairo_rectangle(cr, container.x, container.y, container.width, container.height);
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.014);
-    c.cairo_fill(cr);
-
-    c.cairo_rectangle(cr, container.x + 10, container.y + container.height - 2, container.width - 20, 1);
-    c.cairo_set_source_rgba(cr, 0.55, 0.84, 0.98, 0.18);
-    c.cairo_fill(cr);
+    if (reveal > 0.12) {
+        drawRoundedRect(cr, container, style.corner_radius);
+        c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, style.shell_highlight_alpha * reveal);
+        c.cairo_fill(cr);
+    }
 
     for (entries, 0..) |entry, index| {
-        const rect = itemRect(width, height, entries, index);
+        const rect = itemRect(width, height, entries, style, offset_y, index);
         const hovered = hovered_index != null and hovered_index.? == index;
         const open_app = if (index < open_apps.len) open_apps[index] else dock_ipc.OpenAppInfo{};
         _ = entry.accent;
@@ -109,8 +126,19 @@ pub fn drawDock(
             hovered,
             open_app.id_len > 0,
             open_app.focused,
+            style,
         );
     }
+}
+
+fn revealAmount(style: dock_style.Style, offset_y: f64) f64 {
+    const max_offset = @max(style.hiddenOffset(), 0.001);
+    const progress = std.math.clamp(offset_y / max_offset, 0.0, 1.0);
+    return 1.0 - progress;
+}
+
+fn lerp(a: f64, b: f64, t: f64) f64 {
+    return a + (b - a) * t;
 }
 
 fn drawDockItem(
@@ -121,6 +149,7 @@ fn drawDockItem(
     hovered: bool,
     is_open: bool,
     is_focused: bool,
+    style: dock_style.Style,
 ) void {
     if (hovered or is_focused) {
         drawHoverButton(cr, .{
@@ -128,10 +157,10 @@ fn drawDockItem(
             .y = rect.y + 1.5,
             .width = rect.width - 4.0,
             .height = rect.height - 3.0,
-        }, hovered, is_focused);
+        }, hovered, is_focused, style);
     }
 
-    const tile_size: f64 = 30.0;
+    const tile_size: f64 = style.icon_tile_size;
     const tile_rect = Rect{
         .x = rect.x + (rect.width - tile_size) / 2.0,
         .y = rect.y + (rect.height - tile_size) / 2.0,
@@ -177,19 +206,19 @@ fn drawDockIcon(cr: *c.cairo_t, rect: Rect, surface: *c.cairo_surface_t, alpha: 
     c.cairo_paint_with_alpha(cr, alpha);
 }
 
-fn drawHoverButton(cr: *c.cairo_t, rect: Rect, hovered: bool, is_focused: bool) void {
+fn drawHoverButton(cr: *c.cairo_t, rect: Rect, hovered: bool, is_focused: bool, style: dock_style.Style) void {
     drawRoundedRect(cr, rect, 8);
     if (is_focused and !hovered) {
-        c.cairo_set_source_rgba(cr, 0.34, 0.23, 0.62, 0.17);
+        c.cairo_set_source_rgba(cr, 0.34, 0.23, 0.62, if (style.strong_hover) 0.14 else 0.08);
     } else {
-        c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.045);
+        c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, if (style.strong_hover) 0.045 else 0.024);
     }
     c.cairo_fill_preserve(cr);
     c.cairo_set_line_width(cr, 1);
     if (is_focused) {
-        c.cairo_set_source_rgba(cr, 0.64, 0.49, 0.98, 0.18);
+        c.cairo_set_source_rgba(cr, 0.64, 0.49, 0.98, if (style.strong_hover) 0.24 else 0.16);
     } else {
-        c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.05);
+        c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, if (style.strong_hover) 0.042 else 0.026);
     }
     c.cairo_stroke(cr);
 }

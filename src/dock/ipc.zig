@@ -47,6 +47,27 @@ pub fn hidePreview(allocator: std.mem.Allocator, socket_path: []const u8) !void 
     if (!std.mem.startsWith(u8, std.mem.trim(u8, response, " \r\n\t"), "ok")) return error.InvalidResponse;
 }
 
+pub fn updateGlassRegion(
+    allocator: std.mem.Allocator,
+    socket_path: []const u8,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    surface_height: i32,
+) !void {
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "dock glass {d} {d} {d} {d} {d}\n",
+        .{ x, y, width, height, surface_height },
+    );
+    defer allocator.free(payload);
+
+    const response = try request(allocator, socket_path, payload);
+    defer allocator.free(response);
+    if (!std.mem.startsWith(u8, std.mem.trim(u8, response, " \r\n\t"), "ok")) return error.InvalidResponse;
+}
+
 fn request(allocator: std.mem.Allocator, socket_path: []const u8, payload: []const u8) ![]u8 {
     const address = try std.net.Address.initUnix(socket_path);
     const fd = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC, 0);

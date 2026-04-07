@@ -211,19 +211,19 @@ fn drawArrowButton(cr: *c.cairo_t, rect: Rect, label: []const u8) void {
 fn drawGlassBar(cr: *c.cairo_t, rect: Rect, preferences: settings_model.PreferencesState) void {
     const accent = settings_model.accentSpec(preferences.accent).primary;
     c.cairo_rectangle(cr, rect.x, rect.y, rect.width, rect.height);
-    c.cairo_set_source_rgba(cr, 0.092, 0.098, 0.122, if (preferences.reduce_transparency) 0.96 else 0.74);
+    c.cairo_set_source_rgba(cr, 0.092, 0.098, 0.122, if (preferences.reduce_transparency) 0.94 else 0.24);
     c.cairo_fill(cr);
 
     c.cairo_rectangle(cr, rect.x, rect.y, rect.width, 1);
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.16);
+    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.20);
     c.cairo_fill(cr);
 
     c.cairo_rectangle(cr, rect.x, rect.y + rect.height - 1, rect.width, 1);
-    c.cairo_set_source_rgba(cr, accent[0], accent[1], accent[2], 0.38);
+    c.cairo_set_source_rgba(cr, accent[0], accent[1], accent[2], 0.30);
     c.cairo_fill(cr);
 
     c.cairo_rectangle(cr, rect.x, rect.y, rect.width, rect.height);
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.018);
+    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.030);
     c.cairo_fill(cr);
 }
 

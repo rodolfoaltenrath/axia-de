@@ -3,13 +3,26 @@ const c = @import("wl.zig").c;
 const buffer_mod = @import("buffer.zig");
 const dock_icons = @import("icons.zig");
 const dock_ipc = @import("ipc.zig");
+const dock_style = @import("style.zig");
 const launcher_state = @import("launcher_state");
 const runtime_catalog = @import("runtime_catalog");
+const prefs = @import("axia_prefs");
 const render = @import("render.zig");
 
 const log = std.log.scoped(.axia_dock);
 const default_output_width: u32 = 1366;
 const runtime_sync_interval_ms: i64 = 160;
+const preferences_sync_interval_ms: i64 = 320;
+const auto_hide_grace_ms: i64 = 260;
+const preview_hover_delay_ms: i64 = 220;
+const preview_suppression_after_click_ms: i64 = 520;
+
+const GlassBox = struct {
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+};
 
 const SurfaceState = struct {
     wl_surface: ?*c.struct_wl_surface = null,
@@ -17,15 +30,17 @@ const SurfaceState = struct {
     width: u32 = 0,
     height: u32 = 0,
     configured: bool = false,
-    buffer: ?buffer_mod.ShmBuffer = null,
+    buffers: [2]?buffer_mod.ShmBuffer = .{ null, null },
     dirty: bool = false,
     layer_listener: c.struct_zwlr_layer_surface_v1_listener = undefined,
     surface_listener: c.struct_wl_surface_listener = undefined,
 
     fn destroy(self: *SurfaceState) void {
-        if (self.buffer) |*buffer| {
-            buffer.deinit();
-            self.buffer = null;
+        for (&self.buffers) |*slot| {
+            if (slot.*) |*buffer| {
+                buffer.deinit();
+                slot.* = null;
+            }
         }
         if (self.layer_surface) |layer_surface| {
             c.zwlr_layer_surface_v1_destroy(layer_surface);
@@ -54,9 +69,19 @@ pub const App = struct {
     pointer_x: f64 = 0,
     pointer_y: f64 = 0,
     hovered_index: ?usize = null,
+    hovered_since_ms: i64 = 0,
     last_runtime_sync_ms: i64 = 0,
     previewed_index: ?usize = null,
+    preview_suppressed_until_ms: i64 = 0,
+    pointer_inside: bool = false,
+    hide_deadline_ms: i64 = 0,
+    last_preferences_sync_ms: i64 = 0,
+    last_animation_ms: i64 = 0,
+    slide_offset_y: f64 = 0,
+    last_glass_box: ?GlassBox = null,
+    last_glass_surface_height: i32 = 0,
     catalog: runtime_catalog.Catalog,
+    dock_config: dock_style.Config = dock_style.defaultConfig(),
     favorites: std.ArrayListUnmanaged(runtime_catalog.AppEntry) = .empty,
     display_entries: std.ArrayListUnmanaged(runtime_catalog.AppEntry) = .empty,
     display_open_apps: std.ArrayListUnmanaged(dock_ipc.OpenAppInfo) = .empty,
@@ -83,6 +108,7 @@ pub const App = struct {
         };
         app.ipc_socket_path = std.process.getEnvVarOwned(allocator, "AXIA_IPC_SOCKET") catch null;
         try app.catalog.loadDefault();
+        app.reloadDockPreferences() catch {};
         try launcher_state.ensureDefaultFavorites(allocator, &app.catalog);
         app.favorites = try launcher_state.loadFavoriteEntries(allocator, &app.catalog);
         app.refreshOpenApps() catch {};
@@ -131,7 +157,10 @@ pub const App = struct {
 
     pub fn run(self: *App) !void {
         while (self.running) {
+            try self.refreshPreferencesIfNeeded();
             try self.refreshOpenAppsIfNeeded();
+            self.updateDockAnimation();
+            self.syncPreviewHover();
             try self.redrawIfNeeded();
 
             if (c.wl_display_dispatch_pending(self.display) < 0) {
@@ -148,7 +177,8 @@ pub const App = struct {
                 .revents = 0,
             };
 
-            const result = c.poll(&pollfd, 1, 1000);
+            const timeout_ms: c_int = if (self.isAnimating()) 16 else 1000;
+            const result = c.poll(&pollfd, 1, timeout_ms);
             if (result < 0 and std.posix.errno(result) != .INTR) return error.PollFailed;
             if (result > 0 and (pollfd.revents & c.POLLIN) != 0) {
                 if (c.wl_display_dispatch(self.display) < 0) {
@@ -179,8 +209,9 @@ pub const App = struct {
                 c.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
                 c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
         );
-        c.zwlr_layer_surface_v1_set_size(layer_surface, 0, render.surface_height);
-        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, render.surface_height);
+        const preferred_height = self.dock_config.style.preferredSurfaceHeight();
+        c.zwlr_layer_surface_v1_set_size(layer_surface, 0, preferred_height);
+        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, if (self.dock_config.auto_hide) 0 else @intCast(preferred_height));
         c.zwlr_layer_surface_v1_set_keyboard_interactivity(
             layer_surface,
             c.ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE,
@@ -213,18 +244,7 @@ pub const App = struct {
         const shm = self.shm orelse return error.ShmMissing;
         if (!self.surface.configured or self.surface.width == 0 or self.surface.height == 0) return;
 
-        if (self.surface.buffer) |*buffer| {
-            if (buffer.width != self.surface.width or buffer.height != self.surface.height) {
-                buffer.deinit();
-                self.surface.buffer = null;
-            }
-        }
-
-        if (self.surface.buffer == null) {
-            self.surface.buffer = try buffer_mod.ShmBuffer.init(shm, self.surface.width, self.surface.height);
-        }
-
-        const buffer = &self.surface.buffer.?;
+        const buffer = (try self.acquireBuffer(shm)) orelse return;
         render.drawDock(
             buffer.cr,
             self.surface.width,
@@ -233,13 +253,41 @@ pub const App = struct {
             self.display_open_apps.items,
             &self.icons,
             self.hovered_index,
+            self.dock_config.style,
+            self.slide_offset_y,
         );
 
         c.cairo_surface_flush(buffer.surface);
         c.wl_surface_attach(self.surface.wl_surface.?, buffer.buffer, 0, 0);
         c.wl_surface_damage_buffer(self.surface.wl_surface.?, 0, 0, @intCast(self.surface.width), @intCast(self.surface.height));
         c.wl_surface_commit(self.surface.wl_surface.?);
+        buffer.markBusy();
         self.surface.dirty = false;
+        self.syncGlassRegion() catch {};
+    }
+
+    fn acquireBuffer(self: *App, shm: *c.struct_wl_shm) !?*buffer_mod.ShmBuffer {
+        for (&self.surface.buffers) |*slot| {
+            if (slot.*) |*buffer| {
+                if (buffer.width != self.surface.width or buffer.height != self.surface.height) {
+                    buffer.deinit();
+                    slot.* = null;
+                }
+            }
+        }
+
+        for (&self.surface.buffers) |*slot| {
+            if (slot.*) |*buffer| {
+                if (!buffer.busy) return buffer;
+                continue;
+            }
+
+            slot.* = try buffer_mod.ShmBuffer.init(shm, self.surface.width, self.surface.height);
+            slot.*.?.installListener();
+            return &slot.*.?;
+        }
+
+        return null;
     }
 
     fn setSeat(self: *App, seat: *c.struct_wl_seat) void {
@@ -253,10 +301,21 @@ pub const App = struct {
 
     fn updateHover(self: *App) void {
         if (!self.surface.configured) return;
-        const new_hovered = render.hitTest(self.surface.width, self.surface.height, self.pointer_x, self.pointer_y, self.display_entries.items);
+        const new_hovered = render.hitTest(
+            self.surface.width,
+            self.surface.height,
+            self.pointer_x,
+            self.pointer_y,
+            self.display_entries.items,
+            self.dock_config.style,
+            self.slide_offset_y,
+        );
         if (new_hovered != self.hovered_index) {
             self.hovered_index = new_hovered;
-            self.syncPreviewHover();
+            self.hovered_since_ms = if (new_hovered != null) std.time.milliTimestamp() else 0;
+            if (self.previewed_index != null and self.previewed_index != new_hovered) {
+                self.hidePreview();
+            }
             self.surface.dirty = true;
         }
     }
@@ -266,6 +325,13 @@ pub const App = struct {
         if (now_ms - self.last_runtime_sync_ms < runtime_sync_interval_ms) return;
         self.last_runtime_sync_ms = now_ms;
         try self.refreshOpenApps();
+    }
+
+    fn refreshPreferencesIfNeeded(self: *App) !void {
+        const now_ms = std.time.milliTimestamp();
+        if (now_ms - self.last_preferences_sync_ms < preferences_sync_interval_ms) return;
+        self.last_preferences_sync_ms = now_ms;
+        try self.reloadDockPreferences();
     }
 
     fn refreshOpenApps(self: *App) !void {
@@ -280,7 +346,36 @@ pub const App = struct {
             self.updateHover();
             self.syncPreviewHover();
             self.surface.dirty = true;
+            self.syncGlassRegion() catch {};
+            return;
         }
+
+        if (self.refreshDisplayOpenApps()) {
+            self.syncPreviewHover();
+            self.surface.dirty = true;
+        }
+    }
+
+    fn reloadDockPreferences(self: *App) !void {
+        var loaded = try prefs.load(self.allocator);
+        defer loaded.deinit();
+
+        const next = dock_style.configFromPreferences(loaded);
+        if (dock_style.eql(next, self.dock_config)) return;
+
+        self.dock_config = next;
+        try self.applyLayerPreferences();
+        self.surface.dirty = true;
+        self.syncGlassRegion() catch {};
+    }
+
+    fn applyLayerPreferences(self: *App) !void {
+        const layer_surface = self.surface.layer_surface orelse return;
+        const wl_surface = self.surface.wl_surface orelse return;
+        const preferred_height = self.dock_config.style.preferredSurfaceHeight();
+        c.zwlr_layer_surface_v1_set_size(layer_surface, 0, preferred_height);
+        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, if (self.dock_config.auto_hide) 0 else @intCast(preferred_height));
+        c.wl_surface_commit(wl_surface);
     }
 
     fn rebuildDisplayEntries(self: *App) !void {
@@ -312,6 +407,20 @@ pub const App = struct {
 
         self.icons.deinit();
         self.icons = try dock_icons.IconCache.init(self.allocator, self.display_entries.items);
+    }
+
+    fn refreshDisplayOpenApps(self: *App) bool {
+        var changed = false;
+        for (self.display_entries.items, 0..) |entry, index| {
+            const next_open = self.openAppForEntry(entry) orelse dock_ipc.OpenAppInfo{};
+            if (index >= self.display_open_apps.items.len) break;
+            const current = self.display_open_apps.items[index];
+            if (!openAppInfoEqual(current, next_open)) {
+                self.display_open_apps.items[index] = next_open;
+                changed = true;
+            }
+        }
+        return changed;
     }
 
     fn openAppForEntry(self: *const App, entry: runtime_catalog.AppEntry) ?dock_ipc.OpenAppInfo {
@@ -383,9 +492,10 @@ pub const App = struct {
         const zwlr_surface = layer_surface orelse return;
         c.zwlr_layer_surface_v1_ack_configure(zwlr_surface, serial);
         app.surface.width = if (width == 0) default_output_width else width;
-        app.surface.height = if (height == 0) render.surface_height else height;
+        app.surface.height = if (height == 0) app.dock_config.style.preferredSurfaceHeight() else height;
         app.surface.configured = true;
         app.surface.dirty = true;
+        app.syncGlassRegion() catch {};
         log.info("configured dock surface at {}x{}", .{ app.surface.width, app.surface.height });
     }
 
@@ -403,6 +513,9 @@ pub const App = struct {
     fn handlePointerEnter(data: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: ?*c.struct_wl_surface, surface_x: c.wl_fixed_t, surface_y: c.wl_fixed_t) callconv(.c) void {
         const raw_app = data orelse return;
         const app: *App = @ptrCast(@alignCast(raw_app));
+        app.pointer_inside = true;
+        app.hide_deadline_ms = 0;
+        app.hovered_since_ms = std.time.milliTimestamp();
         app.pointer_x = c.wl_fixed_to_double(surface_x);
         app.pointer_y = c.wl_fixed_to_double(surface_y);
         app.updateHover();
@@ -411,14 +524,19 @@ pub const App = struct {
     fn handlePointerLeave(data: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: ?*c.struct_wl_surface) callconv(.c) void {
         const raw_app = data orelse return;
         const app: *App = @ptrCast(@alignCast(raw_app));
+        app.pointer_inside = false;
+        app.hide_deadline_ms = std.time.milliTimestamp() + auto_hide_grace_ms;
+        app.hovered_since_ms = 0;
         app.hovered_index = null;
-        app.syncPreviewHover();
+        app.hidePreview();
         app.surface.dirty = true;
     }
 
     fn handlePointerMotion(data: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, surface_x: c.wl_fixed_t, surface_y: c.wl_fixed_t) callconv(.c) void {
         const raw_app = data orelse return;
         const app: *App = @ptrCast(@alignCast(raw_app));
+        app.pointer_inside = true;
+        app.hide_deadline_ms = 0;
         app.pointer_x = c.wl_fixed_to_double(surface_x);
         app.pointer_y = c.wl_fixed_to_double(surface_y);
         app.updateHover();
@@ -429,6 +547,7 @@ pub const App = struct {
         const raw_app = data orelse return;
         const app: *App = @ptrCast(@alignCast(raw_app));
         app.hidePreview();
+        app.preview_suppressed_until_ms = std.time.milliTimestamp() + preview_suppression_after_click_ms;
         const index = app.hovered_index orelse return;
         if (index >= app.display_entries.items.len) return;
         const entry = app.display_entries.items[index];
@@ -506,6 +625,14 @@ pub const App = struct {
         return true;
     }
 
+    fn openAppInfoEqual(a: dock_ipc.OpenAppInfo, b: dock_ipc.OpenAppInfo) bool {
+        return a.focused == b.focused and
+            a.id_len == b.id_len and
+            a.title_len == b.title_len and
+            std.mem.eql(u8, a.id[0..a.id_len], b.id[0..b.id_len]) and
+            std.mem.eql(u8, a.title[0..a.title_len], b.title[0..b.title_len]);
+    }
+
     fn syncPreviewHover(self: *App) void {
         const hovered = self.hovered_index orelse {
             self.hidePreview();
@@ -521,9 +648,19 @@ pub const App = struct {
             return;
         };
 
+        const now_ms = std.time.milliTimestamp();
+        if (self.preview_suppressed_until_ms != 0 and now_ms < self.preview_suppressed_until_ms) return;
+        if (self.hovered_since_ms == 0 or now_ms - self.hovered_since_ms < preview_hover_delay_ms) return;
         if (self.previewed_index != null and self.previewed_index.? == hovered) return;
         const socket_path = self.ipc_socket_path orelse return;
-        const rect = render.itemRect(self.surface.width, self.surface.height, self.display_entries.items, hovered);
+        const rect = render.itemRect(
+            self.surface.width,
+            self.surface.height,
+            self.display_entries.items,
+            self.dock_config.style,
+            self.slide_offset_y,
+            hovered,
+        );
         const anchor_x: i32 = @intFromFloat(@round(rect.x + rect.width / 2.0));
         dock_ipc.showPreview(self.allocator, socket_path, open_app.idText(), anchor_x) catch |err| {
             log.err("failed to show dock preview: {}", .{err});
@@ -542,5 +679,86 @@ pub const App = struct {
             log.err("failed to hide dock preview: {}", .{err});
         };
         self.previewed_index = null;
+    }
+
+    fn syncGlassRegion(self: *App) !void {
+        if (!self.surface.configured or self.surface.width == 0 or self.surface.height == 0) return;
+        const socket_path = self.ipc_socket_path orelse return;
+        const hidden_target = self.dock_config.style.hiddenOffset();
+        if (self.dock_config.auto_hide and !self.pointer_inside and self.hovered_index == null and !self.isAnimating() and @abs(self.slide_offset_y - hidden_target) <= 0.25) {
+            try dock_ipc.updateGlassRegion(self.allocator, socket_path, 0, 0, 0, 0, @intCast(self.surface.height));
+            self.last_glass_box = null;
+            self.last_glass_surface_height = @intCast(self.surface.height);
+            return;
+        }
+        const rect = render.containerRect(
+            self.surface.width,
+            self.surface.height,
+            self.display_entries.items,
+            self.dock_config.style,
+            self.slide_offset_y,
+        );
+        const box = GlassBox{
+            .x = @intFromFloat(@round(rect.x)),
+            .y = @intFromFloat(@round(rect.y)),
+            .width = @intFromFloat(@round(rect.width)),
+            .height = @intFromFloat(@round(rect.height)),
+        };
+        const surface_height: i32 = @intCast(self.surface.height);
+        if (self.last_glass_box) |last| {
+            if (last.x == box.x and last.y == box.y and last.width == box.width and last.height == box.height and self.last_glass_surface_height == surface_height) {
+                return;
+            }
+        }
+        try dock_ipc.updateGlassRegion(
+            self.allocator,
+            socket_path,
+            box.x,
+            box.y,
+            box.width,
+            box.height,
+            surface_height,
+        );
+        self.last_glass_box = box;
+        self.last_glass_surface_height = surface_height;
+    }
+
+    fn targetSlideOffset(self: *const App) f64 {
+        if (!self.dock_config.auto_hide) return 0;
+        if (self.pointer_inside or self.hovered_index != null) return 0;
+        const now_ms = std.time.milliTimestamp();
+        if (self.hide_deadline_ms != 0 and now_ms < self.hide_deadline_ms) {
+            return 0;
+        }
+        return self.dock_config.style.hiddenOffset();
+    }
+
+    fn isAnimating(self: *const App) bool {
+        return @abs(self.slide_offset_y - self.targetSlideOffset()) > 0.25;
+    }
+
+    fn updateDockAnimation(self: *App) void {
+        const target = self.targetSlideOffset();
+        const diff = target - self.slide_offset_y;
+        if (@abs(diff) <= 0.25) {
+            if (@abs(self.slide_offset_y - target) > 0.001) {
+                self.slide_offset_y = target;
+                self.surface.dirty = true;
+                self.syncGlassRegion() catch {};
+            }
+            self.last_animation_ms = 0;
+            return;
+        }
+
+        const now_ms = std.time.milliTimestamp();
+        if (self.last_animation_ms == 0) self.last_animation_ms = now_ms;
+        const dt = @max(now_ms - self.last_animation_ms, 1);
+        self.last_animation_ms = now_ms;
+        const response_ms: f64 = if (diff > 0) 150.0 else 185.0;
+        const easing = @min(1.0, (@as(f64, @floatFromInt(dt)) / response_ms) * 1.12);
+        const step = diff * easing;
+        self.slide_offset_y += step;
+        self.surface.dirty = true;
+        self.syncGlassRegion() catch {};
     }
 };

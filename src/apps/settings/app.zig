@@ -264,6 +264,30 @@ pub const App = struct {
                     log.err("failed to save panel settings: {}", .{err});
                 };
             },
+            .dock_size => |preset| {
+                self.preferences.dock_size = preset;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save dock settings: {}", .{err});
+                };
+            },
+            .dock_icon_size => |preset| {
+                self.preferences.dock_icon_size = preset;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save dock settings: {}", .{err});
+                };
+            },
+            .dock_auto_hide => {
+                self.preferences.dock_auto_hide = !self.preferences.dock_auto_hide;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save dock settings: {}", .{err});
+                };
+            },
+            .dock_strong_hover => {
+                self.preferences.dock_strong_hover = !self.preferences.dock_strong_hover;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save dock settings: {}", .{err});
+                };
+            },
             .workspace_wrap => {
                 self.preferences.workspace_wrap = !self.preferences.workspace_wrap;
                 self.savePreferences() catch |err| {
@@ -310,6 +334,18 @@ pub const App = struct {
             .reduce_transparency = self.preferences.reduce_transparency,
             .panel_show_seconds = self.preferences.panel_show_seconds,
             .panel_show_date = self.preferences.panel_show_date,
+            .dock_size = switch (self.preferences.dock_size) {
+                .compact => .compact,
+                .comfortable => .comfortable,
+                .large => .large,
+            },
+            .dock_icon_size = switch (self.preferences.dock_icon_size) {
+                .small => .small,
+                .medium => .medium,
+                .large => .large,
+            },
+            .dock_auto_hide = self.preferences.dock_auto_hide,
+            .dock_strong_hover = self.preferences.dock_strong_hover,
             .workspace_wrap = self.preferences.workspace_wrap,
             .startup_workspace = self.preferences.startup_workspace,
         };
@@ -506,6 +542,10 @@ fn hitEquals(a: render.Hit, b: render.Hit) bool {
         .reduce_transparency => b == .reduce_transparency,
         .panel_show_seconds => b == .panel_show_seconds,
         .panel_show_date => b == .panel_show_date,
+        .dock_size => b == .dock_size and a.dock_size == b.dock_size,
+        .dock_icon_size => b == .dock_icon_size and a.dock_icon_size == b.dock_icon_size,
+        .dock_auto_hide => b == .dock_auto_hide,
+        .dock_strong_hover => b == .dock_strong_hover,
         .workspace_wrap => b == .workspace_wrap,
         .startup_workspace => b == .startup_workspace and a.startup_workspace == b.startup_workspace,
         .scroll_thumb => b == .scroll_thumb,
@@ -519,6 +559,18 @@ fn preferencesStateFromStored(stored: prefs.Preferences) settings_model.Preferen
         .reduce_transparency = stored.reduce_transparency,
         .panel_show_seconds = stored.panel_show_seconds,
         .panel_show_date = stored.panel_show_date,
+        .dock_size = switch (stored.dock_size) {
+            .compact => .compact,
+            .comfortable => .comfortable,
+            .large => .large,
+        },
+        .dock_icon_size = switch (stored.dock_icon_size) {
+            .small => .small,
+            .medium => .medium,
+            .large => .large,
+        },
+        .dock_auto_hide = stored.dock_auto_hide,
+        .dock_strong_hover = stored.dock_strong_hover,
         .workspace_wrap = stored.workspace_wrap,
         .startup_workspace = stored.startup_workspace,
     };

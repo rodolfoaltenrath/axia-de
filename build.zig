@@ -187,6 +187,7 @@ pub fn build(b: *std.Build) void {
     dock_exe.root_module.addImport("apps_catalog", apps_catalog_module);
     dock_exe.root_module.addImport("runtime_catalog", runtime_catalog_module);
     dock_exe.root_module.addImport("launcher_state", launcher_state_module);
+    dock_exe.root_module.addImport("axia_prefs", prefs_module);
     dock_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     dock_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     dock_exe.step.dependOn(&gen_layer_shell_client_header.step);

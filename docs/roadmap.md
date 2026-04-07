@@ -52,4 +52,6 @@
 - validar resize pelos cantos/bordas do cliente
 - corrigir restauracao visual de janelas minimizadas
 - criar o primeiro painel/top bar do Axia-DE em modulo proprio
+- criar infraestrutura compartilhada de glassmorphism compositor-side para `top-bar` e `dock`
+- aplicar blur real primeiro na `top-bar` e depois reaproveitar na `dock`
 - expandir o `axia-files` com acoes utilitarias pendentes: nova pasta, renomear e excluir

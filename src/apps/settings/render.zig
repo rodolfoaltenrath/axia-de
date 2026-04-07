@@ -39,6 +39,7 @@ const nav_items = [_]NavItem{
     .{ .page = .wallpapers, .label = "Papel de Parede" },
     .{ .page = .appearance, .label = "Aparência" },
     .{ .page = .panel, .label = "Painel Superior" },
+    .{ .page = .dock, .label = "Dock" },
     .{ .page = .displays, .label = "Monitores" },
     .{ .page = .workspaces, .label = "Áreas de Trabalho" },
     .{ .page = .network, .label = "Rede" },
@@ -83,6 +84,17 @@ pub fn hitTest(width: u32, height: u32, x: f64, y: f64, state: State) Hit {
     if (state.page == .panel) {
         if (panelSecondsRect(width, height).contains(x, hit_y)) return .panel_show_seconds;
         if (panelDateRect(width, height).contains(x, hit_y)) return .panel_show_date;
+    }
+
+    if (state.page == .dock) {
+        for (settings_model.dock_size_options, 0..) |option, index| {
+            if (dockSizeChipRect(width, height, index).contains(x, hit_y)) return .{ .dock_size = option.preset };
+        }
+        for (settings_model.dock_icon_size_options, 0..) |option, index| {
+            if (dockIconChipRect(width, height, index).contains(x, hit_y)) return .{ .dock_icon_size = option.preset };
+        }
+        if (dockAutoHideRect(width, height).contains(x, hit_y)) return .dock_auto_hide;
+        if (dockStrongHoverRect(width, height).contains(x, hit_y)) return .dock_strong_hover;
     }
 
     if (state.page == .workspaces) {
@@ -178,6 +190,7 @@ fn drawContent(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
         .wallpapers => drawWallpaperPage(cr, width, height, state),
         .appearance => drawAppearancePage(cr, width, height, state),
         .panel => drawPanelPage(cr, width, height, state),
+        .dock => drawDockPage(cr, width, height, state),
         .displays => drawDisplaysPage(cr, width, height, state),
         .workspaces => drawWorkspacesPage(cr, width, height, state),
         .about => drawAboutPage(cr, width, height, state),
@@ -260,6 +273,62 @@ fn drawPanelPage(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
         "Exibe dia e mês diretamente no painel.",
         state.preferences.panel_show_date,
         state.hovered == .panel_show_date,
+        accent,
+    );
+}
+
+fn drawDockPage(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
+    const content = contentRect(width, height);
+    const accent = settings_model.accentSpec(state.preferences.accent).primary;
+    drawLabel(cr, content.x, content.y + 82, 15, "Tamanho, ícones e comportamento da barra inferior.", 0.85, 0.87, 0.91, c.CAIRO_FONT_WEIGHT_NORMAL);
+
+    drawInfoCard(
+        cr,
+        .{ .x = content.x, .y = content.y + 112, .width = content.width, .height = 94 },
+        "Glass do shell",
+        "A dock usa o mesmo efeito de vidro da barra superior e acompanha tamanho e posição em tempo real.",
+    );
+
+    drawLabel(cr, content.x, content.y + 236, 13, "Tamanho da dock", 0.91, 0.93, 0.95, c.CAIRO_FONT_WEIGHT_BOLD);
+    for (settings_model.dock_size_options, 0..) |option, index| {
+        drawChoiceChip(
+            cr,
+            dockSizeChipRect(width, height, index),
+            option.label,
+            state.preferences.dock_size == option.preset,
+            state.hovered == .dock_size and state.hovered.dock_size == option.preset,
+            accent,
+        );
+    }
+
+    drawLabel(cr, content.x, content.y + 316, 13, "Tamanho dos ícones", 0.91, 0.93, 0.95, c.CAIRO_FONT_WEIGHT_BOLD);
+    for (settings_model.dock_icon_size_options, 0..) |option, index| {
+        drawChoiceChip(
+            cr,
+            dockIconChipRect(width, height, index),
+            option.label,
+            state.preferences.dock_icon_size == option.preset,
+            state.hovered == .dock_icon_size and state.hovered.dock_icon_size == option.preset,
+            accent,
+        );
+    }
+
+    drawToggleCard(
+        cr,
+        dockAutoHideRect(width, height),
+        "Ocultar automaticamente",
+        "Esconde a dock e mostra novamente quando o mouse volta para a borda inferior.",
+        state.preferences.dock_auto_hide,
+        state.hovered == .dock_auto_hide,
+        accent,
+    );
+    drawToggleCard(
+        cr,
+        dockStrongHoverRect(width, height),
+        "Hover mais destacado",
+        "Realça mais o item ativo e deixa o feedback do ponteiro mais evidente.",
+        state.preferences.dock_strong_hover,
+        state.hovered == .dock_strong_hover,
         accent,
     );
 }
@@ -462,6 +531,36 @@ fn displayCardRect(width: u32, height: u32, index: usize) Rect {
     };
 }
 
+fn dockSizeChipRect(width: u32, height: u32, index: usize) Rect {
+    const content = pageBodyContentRect(width, height);
+    return .{
+        .x = content.x + @as(f64, @floatFromInt(index)) * 124,
+        .y = content.y + 250,
+        .width = 108,
+        .height = 36,
+    };
+}
+
+fn dockIconChipRect(width: u32, height: u32, index: usize) Rect {
+    const content = pageBodyContentRect(width, height);
+    return .{
+        .x = content.x + @as(f64, @floatFromInt(index)) * 124,
+        .y = content.y + 330,
+        .width = 108,
+        .height = 36,
+    };
+}
+
+fn dockAutoHideRect(width: u32, height: u32) Rect {
+    const content = pageBodyContentRect(width, height);
+    return .{ .x = content.x, .y = content.y + 392, .width = content.width, .height = toggle_card_height };
+}
+
+fn dockStrongHoverRect(width: u32, height: u32) Rect {
+    const content = pageBodyContentRect(width, height);
+    return .{ .x = content.x, .y = content.y + 486, .width = content.width, .height = toggle_card_height };
+}
+
 fn workspaceWrapRect(width: u32, height: u32) Rect {
     const content = pageBodyContentRect(width, height);
     return .{ .x = content.x, .y = content.y + 220, .width = content.width, .height = toggle_card_height };
@@ -571,6 +670,7 @@ fn pageContentHeight(width: u32, height: u32, state: State) f64 {
         .wallpapers => manualPickerCardRect(width, height).y + manualPickerCardRect(width, height).height + 20,
         .appearance => reduceTransparencyRect(width, height).y + reduceTransparencyRect(width, height).height + 20,
         .panel => panelDateRect(width, height).y + panelDateRect(width, height).height + 20,
+        .dock => dockStrongHoverRect(width, height).y + dockStrongHoverRect(width, height).height + 20,
         .displays => blk: {
             if (state.runtime.display_count == 0) {
                 break :blk viewport.y + 240;
@@ -599,6 +699,7 @@ fn pageHeading(page: settings_model.Page) struct { title: []const u8, subtitle: 
         .wallpapers => .{ .title = "Papel de Parede", .subtitle = "Escolha o fundo da sua área de trabalho" },
         .appearance => .{ .title = "Aparência", .subtitle = "Tema, contraste e direção visual do sistema" },
         .panel => .{ .title = "Painel Superior", .subtitle = "Itens, alinhamento e comportamento do topo" },
+        .dock => .{ .title = "Dock", .subtitle = "Tamanho, ícones e comportamento da barra inferior" },
         .displays => .{ .title = "Monitores", .subtitle = "Saídas, escala e organização de telas" },
         .workspaces => .{ .title = "Áreas de Trabalho", .subtitle = "Fluxo, quantidade e comportamento dos espaços" },
         .network => .{ .title = "Rede", .subtitle = "Wi‑Fi, Ethernet e conectividade do desktop" },
@@ -612,6 +713,7 @@ fn placeholderText(page: settings_model.Page) []const u8 {
     return switch (page) {
         .appearance => "Aqui vamos consolidar tema, contraste e variantes visuais.",
         .panel => "Aqui vamos configurar relógio, launcher e widgets do topo.",
+        .dock => "Aqui vamos controlar tamanho, ícones e comportamento da dock.",
         .displays => "Aqui vamos ajustar resolução, escala e layout de monitores.",
         .workspaces => "Aqui vamos controlar áreas de trabalho e regras de navegação.",
         .network => "Aqui vamos mostrar redes disponíveis, status e ajustes de conexão.",
@@ -733,6 +835,34 @@ fn drawWorkspaceChip(
         cr,
         rect,
         14,
+        label,
+        if (selected) 0.08 else 0.92,
+        if (selected) 0.10 else 0.94,
+        if (selected) 0.12 else 0.96,
+    );
+}
+
+fn drawChoiceChip(
+    cr: *c.cairo_t,
+    rect: Rect,
+    label: []const u8,
+    selected: bool,
+    hovered: bool,
+    accent: [3]f64,
+) void {
+    drawRoundedRect(cr, rect, 12);
+    if (selected) {
+        c.cairo_set_source_rgba(cr, accent[0], accent[1], accent[2], 0.92);
+    } else if (hovered) {
+        c.cairo_set_source_rgba(cr, 1, 1, 1, 0.08);
+    } else {
+        c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
+    }
+    c.cairo_fill(cr);
+    drawCenteredLabel(
+        cr,
+        rect,
+        13,
         label,
         if (selected) 0.08 else 0.92,
         if (selected) 0.10 else 0.94,
@@ -875,6 +1005,16 @@ fn drawSettingsNavIcon(
             c.cairo_move_to(cr, cx - scale * 0.18, cy + scale * 0.05);
             c.cairo_line_to(cr, cx - scale * 0.02, cy + scale * 0.05);
             c.cairo_stroke(cr);
+        },
+        .dock => {
+            drawRoundedRect(cr, .{ .x = cx - scale * 0.28, .y = cy - scale * 0.04, .width = scale * 0.56, .height = scale * 0.22 }, 4);
+            c.cairo_stroke(cr);
+            c.cairo_arc(cr, cx - scale * 0.14, cy + scale * 0.12, scale * 0.03, 0, std.math.tau);
+            c.cairo_fill(cr);
+            c.cairo_arc(cr, cx, cy + scale * 0.12, scale * 0.03, 0, std.math.tau);
+            c.cairo_fill(cr);
+            c.cairo_arc(cr, cx + scale * 0.14, cy + scale * 0.12, scale * 0.03, 0, std.math.tau);
+            c.cairo_fill(cr);
         },
         .displays => {
             drawRoundedRect(cr, .{ .x = cx - scale * 0.28, .y = cy - scale * 0.18, .width = scale * 0.34, .height = scale * 0.24 }, 3);

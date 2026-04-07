@@ -191,6 +191,15 @@ pub const App = struct {
         }
     }
 
+    fn scrollAtPointer(self: *App, direction: isize) void {
+        if (!render.scrollRegionRect(self.current_width, self.current_height, self.sidebar_collapsed).contains(self.pointer_x, self.pointer_y)) {
+            return;
+        }
+        self.browser.scrollLines(direction);
+        self.updateHover();
+        self.dirty = true;
+    }
+
     fn handleAction(self: *App) void {
         switch (self.hovered) {
             .none => {},
@@ -404,7 +413,14 @@ pub const App = struct {
         app.updateHover();
         app.redraw() catch {};
     }
-    fn handlePointerAxis(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: u32, _: c.wl_fixed_t) callconv(.c) void {}
+    fn handlePointerAxis(data: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, axis: u32, value: c.wl_fixed_t) callconv(.c) void {
+        if (axis != c.WL_POINTER_AXIS_VERTICAL_SCROLL) return;
+        const raw_app = data orelse return;
+        const app: *App = @ptrCast(@alignCast(raw_app));
+        const amount = c.wl_fixed_to_double(value);
+        if (@abs(amount) < 0.01) return;
+        app.scrollAtPointer(if (amount > 0) 1 else -1);
+    }
     fn handlePointerFrame(_: ?*anyopaque, _: ?*c.struct_wl_pointer) callconv(.c) void {}
     fn handlePointerAxisSource(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32) callconv(.c) void {}
     fn handlePointerAxisStop(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: u32) callconv(.c) void {}

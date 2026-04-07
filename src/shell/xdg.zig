@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("../wl.zig").c;
 const ipc = @import("../ipc/server.zig");
 const settings_model = @import("../settings/model.zig");
+const CairoBuffer = @import("../render/cairo_buffer.zig").CairoBuffer;
 const InteractiveState = @import("interactive.zig").InteractiveState;
 const View = @import("view.zig").View;
 const WorkspaceState = @import("workspace.zig").WorkspaceState;
@@ -32,6 +33,7 @@ pub const XdgManager = struct {
     next_x: i32 = 48,
     next_y: i32 = 48,
     preview_tree: ?[*c]c.struct_wlr_scene_tree = null,
+    preview_frame_buffer: ?*CairoBuffer = null,
     snap_preview_tree: ?[*c]c.struct_wlr_scene_tree = null,
     snap_target: SnapTarget = .none,
     new_toplevel: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
@@ -203,8 +205,9 @@ pub const XdgManager = struct {
         const tree = c.wlr_scene_tree_create(self.overlay_root) orelse return error.PreviewTreeCreateFailed;
         errdefer c.wlr_scene_node_destroy(&tree.*.node);
 
-        const background_color = [4]f32{ 0.09, 0.10, 0.12, 0.96 };
-        _ = c.wlr_scene_rect_create(tree, outer_width, outer_height, &background_color) orelse return error.PreviewRectCreateFailed;
+        const frame_buffer = try self.createPreviewFrameBuffer(@intCast(outer_width), @intCast(outer_height));
+        errdefer frame_buffer.deinit();
+        _ = c.wlr_scene_buffer_create(tree, frame_buffer.wlrBuffer()) orelse return error.PreviewRectCreateFailed;
 
         if (view.workspaceIndex() == self.workspaces.current and !view.isMinimized()) {
             const content_tree = c.wlr_scene_subsurface_tree_create(tree, view.xdg_surface.*.surface) orelse return error.PreviewSurfaceCreateFailed;
@@ -235,12 +238,17 @@ pub const XdgManager = struct {
         c.wlr_scene_node_raise_to_top(&tree.*.node);
 
         self.preview_tree = tree;
+        self.preview_frame_buffer = frame_buffer;
     }
 
     pub fn hideAppPreview(self: *XdgManager) void {
         if (self.preview_tree) |tree| {
             c.wlr_scene_node_destroy(&tree.*.node);
             self.preview_tree = null;
+        }
+        if (self.preview_frame_buffer) |buffer| {
+            buffer.deinit();
+            self.preview_frame_buffer = null;
         }
     }
 
@@ -344,6 +352,45 @@ pub const XdgManager = struct {
             return self.usable_area;
         }
         return area;
+    }
+
+    fn createPreviewFrameBuffer(self: *XdgManager, width: u32, height: u32) !*CairoBuffer {
+        const buffer = try CairoBuffer.init(self.allocator, width, height);
+        const cr = buffer.cr;
+
+        c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+        c.cairo_set_source_rgba(cr, 0, 0, 0, 0);
+        c.cairo_paint(cr);
+        c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
+
+        const outer_x = 0.5;
+        const outer_y = 0.5;
+        const outer_w = @as(f64, @floatFromInt(width)) - 1.0;
+        const outer_h = @as(f64, @floatFromInt(height)) - 1.0;
+        drawRoundedPreviewRect(cr, outer_x, outer_y, outer_w, outer_h, 12.0);
+        c.cairo_set_source_rgba(cr, 0.08, 0.09, 0.12, 0.92);
+        c.cairo_fill_preserve(cr);
+        c.cairo_set_line_width(cr, 1.6);
+        c.cairo_set_source_rgba(cr, 0.30, 0.90, 1.0, 0.95);
+        c.cairo_stroke(cr);
+
+        drawRoundedPreviewRect(cr, 2.0, 2.0, @as(f64, @floatFromInt(width)) - 4.0, @as(f64, @floatFromInt(height)) - 4.0, 10.5);
+        c.cairo_set_line_width(cr, 1.0);
+        c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.12);
+        c.cairo_stroke(cr);
+
+        c.cairo_surface_flush(buffer.surface);
+        return buffer;
+    }
+
+    fn drawRoundedPreviewRect(cr: *c.cairo_t, x: f64, y: f64, width: f64, height: f64, radius: f64) void {
+        const clamped = @min(radius, @min(width, height) / 2.0);
+        c.cairo_new_sub_path(cr);
+        c.cairo_arc(cr, x + width - clamped, y + clamped, clamped, -std.math.pi / 2.0, 0);
+        c.cairo_arc(cr, x + width - clamped, y + height - clamped, clamped, 0, std.math.pi / 2.0);
+        c.cairo_arc(cr, x + clamped, y + height - clamped, clamped, std.math.pi / 2.0, std.math.pi);
+        c.cairo_arc(cr, x + clamped, y + clamped, clamped, std.math.pi, 3.0 * std.math.pi / 2.0);
+        c.cairo_close_path(cr);
     }
 
     fn unregisterView(self: *XdgManager, target: *View) void {

@@ -3,6 +3,7 @@ const c = @import("../wl.zig").c;
 const ProtocolGlobals = @import("protocols.zig").ProtocolGlobals;
 const Output = @import("output.zig").Output;
 const SceneManager = @import("../render/scene.zig").SceneManager;
+const GlassManager = @import("../render/glass/manager.zig").Manager;
 const InputManager = @import("../input/manager.zig").InputManager;
 const LayerManager = @import("../layers/manager.zig").LayerManager;
 const PanelProcess = @import("../panel/process.zig").PanelProcess;
@@ -34,6 +35,7 @@ pub const Server = struct {
     protocols: ProtocolGlobals,
     output_layout: [*c]c.struct_wlr_output_layout,
     scene: SceneManager,
+    glass: GlassManager,
     socket_name: [*c]const u8,
     outputs: std.ArrayListUnmanaged(*Output) = .empty,
     new_output: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
@@ -50,6 +52,8 @@ pub const Server = struct {
     desktop_menu: DesktopMenu,
     settings: SettingsManager,
     settings_prefs: SettingsPreferencesState,
+    dock_glass_surface_box: ?c.struct_wlr_box = null,
+    dock_surface_height: i32 = 0,
 
     pub fn init(allocator: std.mem.Allocator) !Server {
         c.wlr_log_init(c.WLR_ERROR, null);
@@ -85,6 +89,13 @@ pub const Server = struct {
 
         var scene = try SceneManager.init(output_layout);
         errdefer scene.deinit();
+
+        var glass = GlassManager.init(
+            allocator,
+            output_layout,
+            scene.glassEffectRoot(),
+        );
+        errdefer glass.deinit();
 
         var input = try InputManager.init(allocator, display, output_layout);
         errdefer input.deinit();
@@ -133,6 +144,18 @@ pub const Server = struct {
             .reduce_transparency = preferences.reduce_transparency,
             .panel_show_seconds = preferences.panel_show_seconds,
             .panel_show_date = preferences.panel_show_date,
+            .dock_size = switch (preferences.dock_size) {
+                .compact => .compact,
+                .comfortable => .comfortable,
+                .large => .large,
+            },
+            .dock_icon_size = switch (preferences.dock_icon_size) {
+                .small => .small,
+                .medium => .medium,
+                .large => .large,
+            },
+            .dock_auto_hide = preferences.dock_auto_hide,
+            .dock_strong_hover = preferences.dock_strong_hover,
             .workspace_wrap = preferences.workspace_wrap,
             .startup_workspace = preferences.startup_workspace,
         };
@@ -180,6 +203,7 @@ pub const Server = struct {
             .protocols = protocols,
             .output_layout = output_layout,
             .scene = scene,
+            .glass = glass,
             .socket_name = socket_name,
             .input = input,
             .layers = layers,
@@ -219,6 +243,7 @@ pub const Server = struct {
             ipcFocusApp,
             ipcShowPreview,
             ipcHidePreview,
+            ipcUpdateDockGlass,
         );
         self.desktop_menu.setActionCallback(self, handleDesktopAction);
         self.settings.setApplyWallpaperCallback(self, handleApplyWallpaper);
@@ -248,6 +273,7 @@ pub const Server = struct {
         if (self.wallpaper) |wallpaper| wallpaper.deinit();
         self.desktop_menu.deinit();
         self.settings.deinit();
+        self.glass.deinit();
 
         self.scene.deinit();
         _ = self.protocols;
@@ -304,6 +330,7 @@ pub const Server = struct {
             self.settings.setPrimaryOutput(wlr_output);
         }
         self.xdg.setUsableArea(self.layers.getUsableArea());
+        self.syncGlassRegions();
     }
 
     fn unregisterOutput(self: *Server, target: *Output) void {
@@ -370,6 +397,63 @@ pub const Server = struct {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
         server.xdg.setUsableArea(usable_area);
+        server.syncGlassRegions();
+    }
+
+    fn syncGlassRegions(self: *Server) void {
+        const output = if (self.layers.primary_output) |primary|
+            primary
+        else
+            self.xdg.primary_output orelse return;
+        var full_area = std.mem.zeroes(c.struct_wlr_box);
+        c.wlr_output_layout_get_box(self.output_layout, output, &full_area);
+        if (full_area.width <= 0 or full_area.height <= 0) return;
+
+        const usable_area = self.layers.getUsableArea();
+        const top_inset = usable_area.y - full_area.y;
+        if (top_inset > 0) {
+            const top_bar_box = c.struct_wlr_box{
+                .x = full_area.x,
+                .y = full_area.y,
+                .width = full_area.width,
+                .height = top_inset,
+            };
+            self.glass.registerRegion(.top_bar, output, top_bar_box) catch {};
+            self.glass.refreshOutput(output, self.wallpaper) catch |err| {
+                log.err("failed to refresh top bar glass region: {}", .{err});
+            };
+        } else {
+            self.glass.removeRegion(.top_bar, output);
+        }
+
+        if (self.dock_glass_surface_box) |surface_box| {
+            const absolute = c.struct_wlr_box{
+                .x = full_area.x + surface_box.x,
+                .y = full_area.y + full_area.height - self.dock_surface_height + surface_box.y,
+                .width = surface_box.width,
+                .height = surface_box.height,
+            };
+            self.glass.registerRegion(.dock, output, absolute) catch {};
+            self.glass.refreshOutput(output, self.wallpaper) catch |err| {
+                log.err("failed to refresh dock glass region: {}", .{err});
+            };
+        } else {
+            self.glass.removeRegion(.dock, output);
+        }
+    }
+
+    fn ipcUpdateDockGlass(ctx: ?*anyopaque, surface_box: c.struct_wlr_box, surface_height: i32) void {
+        const raw_server = ctx orelse return;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        if (surface_box.width <= 0 or surface_box.height <= 0) {
+            server.dock_glass_surface_box = null;
+            server.dock_surface_height = surface_height;
+            server.syncGlassRegions();
+            return;
+        }
+        server.dock_glass_surface_box = surface_box;
+        server.dock_surface_height = surface_height;
+        server.syncGlassRegions();
     }
 
     fn handleShortcut(ctx: ?*anyopaque, modifiers: u32, sym: c.xkb_keysym_t) bool {
@@ -501,6 +585,8 @@ pub const Server = struct {
 
         for (self.outputs.items) |output| {
             try output.setWallpaper(new_wallpaper);
+            self.glass.markOutputDirty(output.wlr_output);
+            try self.glass.refreshOutput(output.wlr_output, new_wallpaper);
         }
 
         const old_wallpaper = self.wallpaper;
@@ -559,6 +645,18 @@ pub const Server = struct {
             .reduce_transparency = self.settings_prefs.reduce_transparency,
             .panel_show_seconds = self.settings_prefs.panel_show_seconds,
             .panel_show_date = self.settings_prefs.panel_show_date,
+            .dock_size = switch (self.settings_prefs.dock_size) {
+                .compact => .compact,
+                .comfortable => .comfortable,
+                .large => .large,
+            },
+            .dock_icon_size = switch (self.settings_prefs.dock_icon_size) {
+                .small => .small,
+                .medium => .medium,
+                .large => .large,
+            },
+            .dock_auto_hide = self.settings_prefs.dock_auto_hide,
+            .dock_strong_hover = self.settings_prefs.dock_strong_hover,
             .workspace_wrap = self.settings_prefs.workspace_wrap,
             .startup_workspace = self.settings_prefs.startup_workspace,
         };
@@ -641,6 +739,7 @@ pub const Server = struct {
             .wallpapers => "wallpapers",
             .appearance => "appearance",
             .panel => "panel",
+            .dock => "dock",
             .displays => "displays",
             .workspaces => "workspaces",
             .network => "network",

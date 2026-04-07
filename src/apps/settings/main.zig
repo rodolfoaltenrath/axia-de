@@ -23,6 +23,7 @@ fn parsePageArg() settings_model.Page {
     if (std.mem.eql(u8, raw, "wallpapers") or std.mem.eql(u8, raw, "wallpaper")) return .wallpapers;
     if (std.mem.eql(u8, raw, "appearance") or std.mem.eql(u8, raw, "aparencia")) return .appearance;
     if (std.mem.eql(u8, raw, "panel")) return .panel;
+    if (std.mem.eql(u8, raw, "dock")) return .dock;
     if (std.mem.eql(u8, raw, "displays") or std.mem.eql(u8, raw, "monitors")) return .displays;
     if (std.mem.eql(u8, raw, "workspaces")) return .workspaces;
     if (std.mem.eql(u8, raw, "network") or std.mem.eql(u8, raw, "rede")) return .network;

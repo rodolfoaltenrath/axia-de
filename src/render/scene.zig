@@ -6,6 +6,7 @@ pub const SceneManager = struct {
     background_tree: [*c]c.struct_wlr_scene_tree,
     bottom_layer_tree: [*c]c.struct_wlr_scene_tree,
     window_tree: [*c]c.struct_wlr_scene_tree,
+    glass_effect_tree: [*c]c.struct_wlr_scene_tree,
     top_layer_tree: [*c]c.struct_wlr_scene_tree,
     overlay_layer_tree: [*c]c.struct_wlr_scene_tree,
 
@@ -29,6 +30,10 @@ pub const SceneManager = struct {
             return error.SceneWindowTreeCreateFailed;
         };
 
+        const glass_effect_tree = c.wlr_scene_tree_create(&scene.*.tree) orelse {
+            return error.SceneGlassTreeCreateFailed;
+        };
+
         const top_layer_tree = c.wlr_scene_tree_create(&scene.*.tree) orelse {
             return error.SceneTopLayerTreeCreateFailed;
         };
@@ -43,6 +48,7 @@ pub const SceneManager = struct {
             .background_tree = background_tree,
             .bottom_layer_tree = bottom_layer_tree,
             .window_tree = window_tree,
+            .glass_effect_tree = glass_effect_tree,
             .top_layer_tree = top_layer_tree,
             .overlay_layer_tree = overlay_layer_tree,
         };
@@ -67,6 +73,10 @@ pub const SceneManager = struct {
 
     pub fn topLayerRoot(self: *SceneManager) [*c]c.struct_wlr_scene_tree {
         return self.top_layer_tree;
+    }
+
+    pub fn glassEffectRoot(self: *SceneManager) [*c]c.struct_wlr_scene_tree {
+        return self.glass_effect_tree;
     }
 
     pub fn overlayLayerRoot(self: *SceneManager) [*c]c.struct_wlr_scene_tree {

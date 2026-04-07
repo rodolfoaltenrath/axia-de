@@ -1,114 +1,204 @@
 # Axia-DE
 
-Axia-DE is a desktop environment and Wayland compositor built from scratch with Zig and `wlroots`.
+> Ambiente desktop e compositor Wayland escrito do zero em Zig, com foco em modularidade, identidade visual própria e evolução incremental do shell.
 
-Current focus:
-- low-level Wayland compositor core
-- modular architecture by feature/domain
-- lightweight desktop UX primitives before visual polish
+## Visão Geral
 
-## Current Status
+O `Axia-DE` é um desktop environment experimental construído sobre `wlroots`, com uma arquitetura separada por domínios do sistema. A proposta do projeto é evoluir o shell aos poucos, mantendo controle sobre compositor, painel, dock, launcher e apps nativas.
 
-Already implemented:
-- compositor core with `wl_display`, backend, renderer and allocator
-- output management and scene graph rendering
-- keyboard and pointer input
-- XDG toplevel windows
-- layer-shell support
-- top panel client with:
-  - `Areas de Trabalho`
-  - `Aplicativos`
-  - centered clock
-  - calendar popup
-- workspaces with:
-  - `Super+1..4` to switch
-  - `Super+Shift+1..4` to move the focused window
-  - `Super+Tab` to cycle
-  - workspace popup integrated with the panel
-- compositor-driven move/resize with:
-  - `Super + left mouse` to move
-  - `Super + right mouse` to resize
-- launcher popup with defaults for:
-  - `cosmic-terminal` with fallback to `alacritty`
-  - `cosmic-files` with fallback to `xdg-open "$HOME"`
-  - `firefox`
+Hoje o projeto já vai além de um protótipo visual: ele possui fluxo real de sessão, apps integradas, configurações persistidas, popups do sistema e recursos de shell como preview de janelas, encaixe por arrasto e efeitos de vidro no painel e na dock.
 
-## Repository Layout
+## Destaques Atuais
+
+### Shell e compositor
+
+- compositor Wayland com `wl_display`, backend, renderer, allocator e scene graph
+- suporte a `xdg-shell` e `layer-shell`
+- gerenciamento de saídas, input de teclado e ponteiro
+- workspaces com troca, ciclo e movimentação de janelas
+- mover e redimensionar janelas com `Super + mouse`
+- snap preview ao arrastar janelas para topo, metades e cantos
+- mini preview de apps abertas na dock
+
+### Interface do sistema
+
+- top bar com efeito glassmorphism real
+- dock com efeito glassmorphism real, auto-hide e preferências persistidas
+- launcher com descoberta dinâmica de apps via `.desktop`
+- recentes e favoritos persistidos
+- ícones reais na dock e no launcher
+
+### Painel e controles do sistema
+
+- popup de calendário
+- controle de áudio com volume, mute e troca de dispositivo
+- popup de Bluetooth com toggle e conexão de dispositivos
+- popup de rede com Wi‑Fi/Ethernet
+- indicador de bateria condicional para notebooks
+- menu de energia com bloquear, sair, suspender, reiniciar e desligar
+
+### Apps nativas
+
+- `axia-files`
+  - navegação por pastas
+  - seleção visual
+  - abertura com app padrão
+  - rolagem e barra de scroll
+- `axia-settings`
+  - aparência
+  - painel superior
+  - monitores
+  - áreas de trabalho
+  - dock
+  - wallpaper com fluxo interno
+
+## Arquitetura
+
+O projeto é organizado por domínio para facilitar evolução e manutenção:
 
 ```text
-src/core/      compositor bootstrap, outputs, protocol globals
-src/input/     keyboard and pointer handling
-src/shell/     xdg-shell, views, workspaces, decorations
-src/layers/    layer-shell integration
-src/render/    scene/background helpers
-src/panel/     top panel Wayland client
-src/ipc/       compositor/panel IPC
-protocols/     vendored protocol XML files
-docs/          roadmap and project notes
+src/core/      bootstrap do compositor, outputs e servidor principal
+src/input/     teclado, ponteiro e atalhos
+src/shell/     xdg-shell, views, workspaces, snapping e previews
+src/layers/    integração com layer-shell
+src/render/    scene graph, wallpaper e efeitos visuais
+src/panel/     top bar e popups do sistema
+src/dock/      dock, auto-hide, preview e integração com o compositor
+src/apps/      launcher, files, settings e catálogo de apps
+src/config/    preferências persistidas e estado local
+src/ipc/       comunicação entre compositor e componentes do shell
+protocols/     XMLs vendorizados dos protocolos Wayland
+docs/          roadmap, notas técnicas e planejamento
 ```
 
-## Requirements
+## Binários Gerados
 
-Recommended target environment:
+Ao compilar, o projeto instala estes componentes:
+
+- `axia-de`
+- `axia-panel`
+- `axia-dock`
+- `axia-launcher`
+- `axia-files`
+- `axia-settings`
+
+## Requisitos
+
+Ambiente recomendado:
+
 - CachyOS / Arch Linux
-- Zig 0.15.x
+- Zig `0.15.x`
 - `wlroots 0.18`
+- sessão Wayland para testes aninhados
 
-Packages typically required on Arch/CachyOS:
+Pacotes principais no Arch/CachyOS:
 
 ```bash
-sudo pacman -S --needed zig base-devel pkgconf wlroots0.18 wayland wayland-protocols libxkbcommon pixman mesa libinput seatd cairo cosmic-files cosmic-terminal alacritty firefox
+sudo pacman -S --needed \
+  zig base-devel pkgconf \
+  wlroots0.18 wayland wayland-protocols \
+  libxkbcommon pixman mesa libinput seatd cairo
 ```
 
-## Build
+Pacotes úteis para os recursos atuais do shell:
+
+```bash
+sudo pacman -S --needed \
+  networkmanager bluez bluez-utils rfkill \
+  pipewire wireplumber \
+  ghostty firefox code
+```
+
+Observação:
+
+- áudio usa `wpctl`
+- rede usa `nmcli`
+- Bluetooth usa `bluetoothctl` e `rfkill`
+- ações de sessão usam `loginctl` e `systemctl`
+
+## Compilação
 
 ```bash
 zig build
 ```
 
-## Run
+## Execução
 
-Nested inside your current Wayland session:
+Para rodar o Axia-DE dentro da sua sessão Wayland atual:
 
 ```bash
 zig build run
 ```
 
-This starts:
-- `axia-de`
-- `axia-panel`
+Isso inicia o compositor e sobe os componentes do shell necessários para a sessão.
 
-## Interaction
-
-Keyboard:
-- `Escape`: terminate Axia-DE
-- `Super+1..4`: switch workspaces
-- `Super+Shift+1..4`: move focused window to a workspace
-- `Super+Tab`: cycle workspaces
-
-Mouse:
-- `Super + left mouse`: move focused window
-- `Super + right mouse`: resize focused window
-
-Panel:
-- `Areas de Trabalho`: workspace popup
-- `Aplicativos`: app launcher popup
-- clock: calendar popup
-
-Wallpaper:
-- default asset: `assets/wallpapers/axia-aurora.png`
-- override per run:
+Também é possível rodar componentes isolados durante desenvolvimento:
 
 ```bash
-AXIA_WALLPAPER=/caminho/para/seu-wallpaper.png zig build run
+zig build run-panel
+zig build run-dock
 ```
 
-## Notes
+## Wallpaper
 
-- The panel is a separate Wayland client spawned by the compositor.
-- The project is still in active prototyping, so some UX details are intentionally minimal.
-- Generated build output is ignored via `.gitignore`.
+Wallpaper padrão:
+
+```text
+assets/wallpapers/axia-aurora.png
+```
+
+Para sobrescrever na execução:
+
+```bash
+AXIA_WALLPAPER=/caminho/para/wallpaper.png zig build run
+```
+
+## Atalhos
+
+### Teclado
+
+- `Escape`: encerra o Axia-DE
+- `Super+1..4`: troca de workspace
+- `Super+Shift+1..4`: move a janela focada para outra workspace
+- `Super+Tab`: cicla entre workspaces
+- `Super+Espaço`: abre o launcher
+
+### Mouse
+
+- `Super + botão esquerdo`: mover janela
+- `Super + botão direito`: redimensionar janela
+- arrastar para bordas/cantos: snap preview e encaixe
+
+## Estado do Projeto
+
+O `Axia-DE` está em fase de prototipação avançada, caminhando para um ciclo de testes `pré-alpha/alpha`. A base principal do shell já existe, mas o projeto ainda está em evolução rápida, com ajustes frequentes de UX, polimento visual e comportamento do compositor.
+
+Em outras palavras: já é um projeto usável para desenvolvimento e experimentação, mas ainda não é um ambiente “finalizado”.
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md).
+O roadmap vivo do projeto está em:
+
+- [docs/roadmap.md](docs/roadmap.md)
+
+Documentos técnicos relacionados:
+
+- [docs/glassmorphism.md](docs/glassmorphism.md)
+- [docs/glassmorphism-plan.md](docs/glassmorphism-plan.md)
+
+## Filosofia do Projeto
+
+O objetivo do Axia-DE não é apenas “subir um compositor”, mas construir um shell com identidade própria:
+
+- base técnica controlada em Zig
+- arquitetura modular
+- integração forte entre compositor e apps do shell
+- espaço para experimentar UX de desktop sem depender de um stack monolítico
+
+## Observações
+
+- painel e dock são processos separados do compositor
+- boa parte do shell conversa por IPC com o core da sessão
+- o projeto prioriza recursos reais do desktop antes de polimento absoluto
+- mudanças visuais e comportamentais ainda acontecem com bastante frequência
+

@@ -8,6 +8,18 @@ pub const AccentPreset = enum {
     moss,
 };
 
+pub const DockSizePreset = enum {
+    compact,
+    comfortable,
+    large,
+};
+
+pub const DockIconSizePreset = enum {
+    small,
+    medium,
+    large,
+};
+
 pub const Preferences = struct {
     allocator: std.mem.Allocator,
     wallpaper_path: ?[]u8 = null,
@@ -15,6 +27,10 @@ pub const Preferences = struct {
     reduce_transparency: bool = false,
     panel_show_seconds: bool = false,
     panel_show_date: bool = true,
+    dock_size: DockSizePreset = .comfortable,
+    dock_icon_size: DockIconSizePreset = .medium,
+    dock_auto_hide: bool = false,
+    dock_strong_hover: bool = false,
     workspace_wrap: bool = true,
     startup_workspace: usize = 0,
 
@@ -41,6 +57,10 @@ pub const Preferences = struct {
             \\reduce_transparency={d}
             \\panel_show_seconds={d}
             \\panel_show_date={d}
+            \\dock_size={s}
+            \\dock_icon_size={s}
+            \\dock_auto_hide={d}
+            \\dock_strong_hover={d}
             \\workspace_wrap={d}
             \\startup_workspace={d}
             \\
@@ -51,6 +71,10 @@ pub const Preferences = struct {
                 @intFromBool(self.reduce_transparency),
                 @intFromBool(self.panel_show_seconds),
                 @intFromBool(self.panel_show_date),
+                dockSizeToString(self.dock_size),
+                dockIconSizeToString(self.dock_icon_size),
+                @intFromBool(self.dock_auto_hide),
+                @intFromBool(self.dock_strong_hover),
                 @intFromBool(self.workspace_wrap),
                 self.startup_workspace,
             },
@@ -106,6 +130,26 @@ pub fn load(allocator: std.mem.Allocator) !Preferences {
 
         if (std.mem.startsWith(u8, line, "panel_show_date=")) {
             prefs.panel_show_date = parseBool(std.mem.trim(u8, line["panel_show_date=".len..], " \r\t"));
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, line, "dock_size=")) {
+            prefs.dock_size = parseDockSize(std.mem.trim(u8, line["dock_size=".len..], " \r\t"));
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, line, "dock_icon_size=")) {
+            prefs.dock_icon_size = parseDockIconSize(std.mem.trim(u8, line["dock_icon_size=".len..], " \r\t"));
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, line, "dock_auto_hide=")) {
+            prefs.dock_auto_hide = parseBool(std.mem.trim(u8, line["dock_auto_hide=".len..], " \r\t"));
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, line, "dock_strong_hover=")) {
+            prefs.dock_strong_hover = parseBool(std.mem.trim(u8, line["dock_strong_hover=".len..], " \r\t"));
             continue;
         }
 
@@ -173,5 +217,33 @@ fn accentToString(accent: AccentPreset) []const u8 {
         .aurora => "aurora",
         .ember => "ember",
         .moss => "moss",
+    };
+}
+
+fn parseDockSize(value: []const u8) DockSizePreset {
+    if (std.ascii.eqlIgnoreCase(value, "compact")) return .compact;
+    if (std.ascii.eqlIgnoreCase(value, "large")) return .large;
+    return .comfortable;
+}
+
+fn dockSizeToString(size: DockSizePreset) []const u8 {
+    return switch (size) {
+        .compact => "compact",
+        .comfortable => "comfortable",
+        .large => "large",
+    };
+}
+
+fn parseDockIconSize(value: []const u8) DockIconSizePreset {
+    if (std.ascii.eqlIgnoreCase(value, "small")) return .small;
+    if (std.ascii.eqlIgnoreCase(value, "large")) return .large;
+    return .medium;
+}
+
+fn dockIconSizeToString(size: DockIconSizePreset) []const u8 {
+    return switch (size) {
+        .small => "small",
+        .medium => "medium",
+        .large => "large",
     };
 }

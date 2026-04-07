@@ -31,6 +31,22 @@ pub const WallpaperAsset = struct {
         return &self.image.base;
     }
 
+    pub fn pixelData(self: *WallpaperAsset) []u8 {
+        return self.image.pixels;
+    }
+
+    pub fn stride(self: *WallpaperAsset) usize {
+        return self.image.stride;
+    }
+
+    pub fn width(self: *WallpaperAsset) u32 {
+        return @intCast(self.image.base.width);
+    }
+
+    pub fn height(self: *WallpaperAsset) u32 {
+        return @intCast(self.image.base.height);
+    }
+
     fn resolvePath(allocator: std.mem.Allocator) !?[]u8 {
         const from_env = std.process.getEnvVarOwned(allocator, "AXIA_WALLPAPER") catch |err| switch (err) {
             error.EnvironmentVariableNotFound => null,
