@@ -52,3 +52,4 @@
 - validar resize pelos cantos/bordas do cliente
 - corrigir restauracao visual de janelas minimizadas
 - criar o primeiro painel/top bar do Axia-DE em modulo proprio
+- expandir o `axia-files` com acoes utilitarias pendentes: nova pasta, renomear e excluir

@@ -23,6 +23,7 @@ pub const Hit = union(enum) {
     close,
     toggle_sidebar,
     up,
+    open_selected,
     previous,
     next,
     sort_modified,
@@ -65,6 +66,7 @@ pub fn hitTest(
     y: f64,
     snapshot: browser.Snapshot,
     sidebar_collapsed: bool,
+    picker_mode: bool,
 ) Hit {
     if (closeRect(width).contains(x, y)) return .close;
     if (maximizeRect(width).contains(x, y)) return .maximize;
@@ -72,6 +74,7 @@ pub fn hitTest(
     if (toggleSidebarRect().contains(x, y)) return .toggle_sidebar;
 
     if (upRect(width, height, sidebar_collapsed).contains(x, y)) return .up;
+    if (!picker_mode and openSelectedRect(width, height, sidebar_collapsed).contains(x, y)) return .open_selected;
     if (previousRect(width, height, sidebar_collapsed).contains(x, y)) return .previous;
     if (nextRect(width, height, sidebar_collapsed).contains(x, y)) return .next;
     if (modifiedHeaderRect(width, height, sidebar_collapsed).contains(x, y)) return .sort_modified;
@@ -171,6 +174,16 @@ fn sidebarItemRect(sidebar: Rect, target: browser.SidebarTarget) Rect {
     };
 }
 
+fn openSelectedRect(width: u32, height: u32, collapsed: bool) Rect {
+    const content = contentRect(width, height, collapsed);
+    return .{
+        .x = content.x + content.width - 94,
+        .y = content.y + 10,
+        .width = 84,
+        .height = 30,
+    };
+}
+
 fn entryRect(width: u32, height: u32, index: usize, collapsed: bool) Rect {
     const content = contentRect(width, height, collapsed);
     return .{
@@ -245,6 +258,15 @@ fn drawContent(
     drawToolbarButton(cr, previousRect(width, height, sidebar_collapsed), "<", hovered == .previous);
     drawToolbarButton(cr, nextRect(width, height, sidebar_collapsed), ">", hovered == .next);
     drawToolbarButton(cr, upRect(width, height, sidebar_collapsed), "^", hovered == .up);
+    if (!picker_mode) {
+        drawActionButton(
+            cr,
+            openSelectedRect(width, height, sidebar_collapsed),
+            "Abrir",
+            snapshot.selected_is_file,
+            hovered == .open_selected,
+        );
+    }
 
     drawBreadcrumb(cr, content, snapshot.current_dir);
     if (picker_mode) drawPickerHint(cr, content);
@@ -284,6 +306,7 @@ fn drawContent(
                 snapshot.entries[index].modifiedText(),
                 snapshot.entries[index].sizeText(),
                 hovered_entry,
+                snapshot.selected_visible and snapshot.selected_visible_index == index,
             );
         }
         c.cairo_restore(cr);
@@ -358,8 +381,13 @@ fn drawEntryRow(
     modified: []const u8,
     size: []const u8,
     hovered: bool,
+    selected: bool,
 ) void {
-    if (hovered) {
+    if (selected) {
+        c.cairo_rectangle(cr, rect.x, rect.y, rect.width, rect.height);
+        c.cairo_set_source_rgba(cr, 0.22, 0.62, 0.88, 0.18);
+        c.cairo_fill(cr);
+    } else if (hovered) {
         c.cairo_rectangle(cr, rect.x, rect.y, rect.width, rect.height);
         c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
         c.cairo_fill(cr);
@@ -383,7 +411,7 @@ fn drawEntryRow(
     }
 
     c.cairo_rectangle(cr, rect.x, rect.y + rect.height - 1, rect.width, 1);
-    c.cairo_set_source_rgba(cr, 1, 1, 1, 0.045);
+    c.cairo_set_source_rgba(cr, if (selected) 0.32 else 1, if (selected) 0.82 else 1, if (selected) 0.96 else 1, if (selected) 0.16 else 0.045);
     c.cairo_fill(cr);
 }
 
@@ -461,6 +489,25 @@ fn drawToolbarButton(cr: *c.cairo_t, rect: Rect, label: []const u8, hovered: boo
         c.cairo_fill(cr);
     }
     drawCenteredLabel(cr, rect, 18, label, 0.94, 0.95, 0.97);
+}
+
+fn drawActionButton(cr: *c.cairo_t, rect: Rect, label: []const u8, enabled: bool, hovered: bool) void {
+    drawRoundedRect(cr, rect, 10);
+    if (enabled) {
+        c.cairo_set_source_rgba(cr, if (hovered) 0.20 else 0.16, if (hovered) 0.56 else 0.46, if (hovered) 0.76 else 0.62, if (hovered) 0.90 else 0.74);
+        c.cairo_fill_preserve(cr);
+        c.cairo_set_source_rgba(cr, 0.44, 0.88, 0.98, 0.28);
+        c.cairo_set_line_width(cr, 1);
+        c.cairo_stroke(cr);
+        drawCenteredLabel(cr, rect, 14, label, 0.95, 0.97, 1.0);
+    } else {
+        c.cairo_set_source_rgba(cr, 1, 1, 1, 0.04);
+        c.cairo_fill_preserve(cr);
+        c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
+        c.cairo_set_line_width(cr, 1);
+        c.cairo_stroke(cr);
+        drawCenteredLabel(cr, rect, 14, label, 0.58, 0.60, 0.64);
+    }
 }
 
 fn drawSidebarItem(

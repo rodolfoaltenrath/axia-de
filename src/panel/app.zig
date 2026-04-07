@@ -1,4 +1,13 @@
 const std = @import("std");
+const audio = @import("audio.zig");
+const audio_popup = @import("audio_popup.zig");
+const battery = @import("battery.zig");
+const battery_popup = @import("battery_popup.zig");
+const bluetooth = @import("bluetooth.zig");
+const bluetooth_popup = @import("bluetooth_popup.zig");
+const network = @import("network.zig");
+const network_popup = @import("network_popup.zig");
+const power_popup = @import("power_popup.zig");
 const c = @import("wl.zig").c;
 const buffer_mod = @import("buffer.zig");
 const calendar = @import("calendar.zig");
@@ -18,6 +27,11 @@ const SurfaceRole = enum {
     panel,
     dismiss_overlay,
     clock_popup,
+    power_popup,
+    battery_popup,
+    network_popup,
+    bluetooth_popup,
+    audio_popup,
     launcher_popup,
     workspace_popup,
 };
@@ -68,6 +82,11 @@ pub const App = struct {
     ipc_socket_path: ?[]u8 = null,
     running: bool = true,
     clock_popup_visible: bool = false,
+    power_popup_visible: bool = false,
+    battery_popup_visible: bool = false,
+    network_popup_visible: bool = false,
+    bluetooth_popup_visible: bool = false,
+    audio_popup_visible: bool = false,
     launcher_popup_visible: bool = false,
     workspace_popup_visible: bool = false,
     now: calendar.DateTime = .{ .tm = std.mem.zeroes(c.struct_tm) },
@@ -78,9 +97,22 @@ pub const App = struct {
     pointer_role: ?SurfaceRole = null,
     panel_hovered: render.HoverTarget = .none,
     preferences: settings_model.PreferencesState = .{},
+    audio_state: audio.State = .{},
+    battery_state: battery.State = .{},
+    network_state: network.State = .{},
+    bluetooth_state: bluetooth.State = .{},
+    last_audio_refresh_ms: i64 = 0,
+    last_battery_refresh_ms: i64 = 0,
+    last_network_refresh_ms: i64 = 0,
+    last_bluetooth_refresh_ms: i64 = 0,
     panel: SurfaceState = .{ .role = .panel },
     dismiss_overlay: SurfaceState = .{ .role = .dismiss_overlay },
     popup: SurfaceState = .{ .role = .clock_popup },
+    power_popup: SurfaceState = .{ .role = .power_popup },
+    battery_popup: SurfaceState = .{ .role = .battery_popup },
+    network_popup: SurfaceState = .{ .role = .network_popup },
+    bluetooth_popup: SurfaceState = .{ .role = .bluetooth_popup },
+    audio_popup: SurfaceState = .{ .role = .audio_popup },
     launcher_popup: SurfaceState = .{ .role = .launcher_popup },
     workspace_popup: SurfaceState = .{ .role = .workspace_popup },
     workspace_state: ipc.WorkspaceState = .{},
@@ -122,6 +154,14 @@ pub const App = struct {
             .month = app.now.month(),
         };
         _ = app.refreshPreferences();
+        _ = audio.refresh(allocator, &app.audio_state);
+        _ = battery.refresh(allocator, &app.battery_state);
+        _ = network.refresh(allocator, &app.network_state);
+        _ = bluetooth.refresh(allocator, &app.bluetooth_state);
+        app.last_audio_refresh_ms = std.time.milliTimestamp();
+        app.last_battery_refresh_ms = app.last_audio_refresh_ms;
+        app.last_network_refresh_ms = app.last_audio_refresh_ms;
+        app.last_bluetooth_refresh_ms = app.last_audio_refresh_ms;
 
         app.registry_listener = .{
             .global = handleGlobal,
@@ -143,6 +183,11 @@ pub const App = struct {
     pub fn deinit(self: *App) void {
         self.workspace_popup.destroy();
         self.launcher_popup.destroy();
+        self.power_popup.destroy();
+        self.battery_popup.destroy();
+        self.network_popup.destroy();
+        self.bluetooth_popup.destroy();
+        self.audio_popup.destroy();
         self.popup.destroy();
         self.dismiss_overlay.destroy();
         self.panel.destroy();
@@ -169,6 +214,10 @@ pub const App = struct {
     pub fn run(self: *App) !void {
         while (self.running) {
             self.tickClock();
+            self.tickBattery();
+            self.tickNetwork();
+            self.tickBluetooth();
+            self.tickAudio();
             try self.redrawIfNeeded();
 
             if (c.wl_display_dispatch_pending(self.display) < 0) {
@@ -272,6 +321,216 @@ pub const App = struct {
 
     fn destroyClockPopup(self: *App) void {
         self.popup.destroy();
+    }
+
+    fn createPowerPopup(self: *App) !void {
+        if (self.power_popup.layer_surface != null) return;
+        try self.ensureDismissOverlay();
+
+        const compositor = self.compositor orelse return error.CompositorMissing;
+        const layer_shell = self.layer_shell orelse return error.LayerShellMissing;
+
+        const wl_surface = c.wl_compositor_create_surface(compositor) orelse return error.SurfaceCreateFailed;
+        errdefer c.wl_surface_destroy(wl_surface);
+
+        const layer_surface = c.zwlr_layer_shell_v1_get_layer_surface(
+            layer_shell,
+            wl_surface,
+            null,
+            c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+            "axia-panel-power",
+        ) orelse return error.LayerSurfaceCreateFailed;
+
+        c.zwlr_layer_surface_v1_set_anchor(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
+        );
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 2, 8, 0, 0);
+        c.zwlr_layer_surface_v1_set_size(layer_surface, power_popup.popup_width, power_popup.popup_height);
+        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
+        c.zwlr_layer_surface_v1_set_keyboard_interactivity(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE,
+        );
+
+        self.power_popup.wl_surface = wl_surface;
+        self.power_popup.layer_surface = layer_surface;
+        self.power_popup.dirty = true;
+        self.installSurfaceListeners(&self.power_popup);
+
+        c.wl_surface_commit(wl_surface);
+    }
+
+    fn destroyPowerPopup(self: *App) void {
+        self.power_popup.destroy();
+    }
+
+    fn createBatteryPopup(self: *App) !void {
+        if (self.battery_popup.layer_surface != null) return;
+        try self.ensureDismissOverlay();
+
+        const compositor = self.compositor orelse return error.CompositorMissing;
+        const layer_shell = self.layer_shell orelse return error.LayerShellMissing;
+
+        const wl_surface = c.wl_compositor_create_surface(compositor) orelse return error.SurfaceCreateFailed;
+        errdefer c.wl_surface_destroy(wl_surface);
+
+        const layer_surface = c.zwlr_layer_shell_v1_get_layer_surface(
+            layer_shell,
+            wl_surface,
+            null,
+            c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+            "axia-panel-battery",
+        ) orelse return error.LayerSurfaceCreateFailed;
+
+        c.zwlr_layer_surface_v1_set_anchor(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
+        );
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 2, 138, 0, 0);
+        c.zwlr_layer_surface_v1_set_size(layer_surface, battery_popup.popup_width, battery_popup.popup_height);
+        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
+        c.zwlr_layer_surface_v1_set_keyboard_interactivity(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE,
+        );
+
+        self.battery_popup.wl_surface = wl_surface;
+        self.battery_popup.layer_surface = layer_surface;
+        self.battery_popup.dirty = true;
+        self.installSurfaceListeners(&self.battery_popup);
+
+        c.wl_surface_commit(wl_surface);
+    }
+
+    fn destroyBatteryPopup(self: *App) void {
+        self.battery_popup.destroy();
+    }
+
+    fn createNetworkPopup(self: *App) !void {
+        if (self.network_popup.layer_surface != null) return;
+        try self.ensureDismissOverlay();
+
+        const compositor = self.compositor orelse return error.CompositorMissing;
+        const layer_shell = self.layer_shell orelse return error.LayerShellMissing;
+
+        const wl_surface = c.wl_compositor_create_surface(compositor) orelse return error.SurfaceCreateFailed;
+        errdefer c.wl_surface_destroy(wl_surface);
+
+        const layer_surface = c.zwlr_layer_shell_v1_get_layer_surface(
+            layer_shell,
+            wl_surface,
+            null,
+            c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+            "axia-panel-network",
+        ) orelse return error.LayerSurfaceCreateFailed;
+
+        c.zwlr_layer_surface_v1_set_anchor(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
+        );
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 2, 96, 0, 0);
+        c.zwlr_layer_surface_v1_set_size(layer_surface, network_popup.popup_width, network_popup.popup_height);
+        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
+        c.zwlr_layer_surface_v1_set_keyboard_interactivity(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE,
+        );
+
+        self.network_popup.wl_surface = wl_surface;
+        self.network_popup.layer_surface = layer_surface;
+        self.network_popup.dirty = true;
+        self.installSurfaceListeners(&self.network_popup);
+
+        c.wl_surface_commit(wl_surface);
+    }
+
+    fn destroyNetworkPopup(self: *App) void {
+        self.network_popup.destroy();
+    }
+
+    fn createBluetoothPopup(self: *App) !void {
+        if (self.bluetooth_popup.layer_surface != null) return;
+        try self.ensureDismissOverlay();
+
+        const compositor = self.compositor orelse return error.CompositorMissing;
+        const layer_shell = self.layer_shell orelse return error.LayerShellMissing;
+
+        const wl_surface = c.wl_compositor_create_surface(compositor) orelse return error.SurfaceCreateFailed;
+        errdefer c.wl_surface_destroy(wl_surface);
+
+        const layer_surface = c.zwlr_layer_shell_v1_get_layer_surface(
+            layer_shell,
+            wl_surface,
+            null,
+            c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+            "axia-panel-bluetooth",
+        ) orelse return error.LayerSurfaceCreateFailed;
+
+        c.zwlr_layer_surface_v1_set_anchor(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
+        );
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 2, 54, 0, 0);
+        c.zwlr_layer_surface_v1_set_size(layer_surface, bluetooth_popup.popup_width, bluetooth_popup.popup_height);
+        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
+        c.zwlr_layer_surface_v1_set_keyboard_interactivity(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE,
+        );
+
+        self.bluetooth_popup.wl_surface = wl_surface;
+        self.bluetooth_popup.layer_surface = layer_surface;
+        self.bluetooth_popup.dirty = true;
+        self.installSurfaceListeners(&self.bluetooth_popup);
+
+        c.wl_surface_commit(wl_surface);
+    }
+
+    fn destroyBluetoothPopup(self: *App) void {
+        self.bluetooth_popup.destroy();
+    }
+
+    fn createAudioPopup(self: *App) !void {
+        if (self.audio_popup.layer_surface != null) return;
+        try self.ensureDismissOverlay();
+
+        const compositor = self.compositor orelse return error.CompositorMissing;
+        const layer_shell = self.layer_shell orelse return error.LayerShellMissing;
+
+        const wl_surface = c.wl_compositor_create_surface(compositor) orelse return error.SurfaceCreateFailed;
+        errdefer c.wl_surface_destroy(wl_surface);
+
+        const layer_surface = c.zwlr_layer_shell_v1_get_layer_surface(
+            layer_shell,
+            wl_surface,
+            null,
+            c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+            "axia-panel-audio",
+        ) orelse return error.LayerSurfaceCreateFailed;
+
+        c.zwlr_layer_surface_v1_set_anchor(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
+        );
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 2, 12, 0, 0);
+        c.zwlr_layer_surface_v1_set_size(layer_surface, audio_popup.popup_width, audio_popup.popup_height);
+        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
+        c.zwlr_layer_surface_v1_set_keyboard_interactivity(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE,
+        );
+
+        self.audio_popup.wl_surface = wl_surface;
+        self.audio_popup.layer_surface = layer_surface;
+        self.audio_popup.dirty = true;
+        self.installSurfaceListeners(&self.audio_popup);
+
+        c.wl_surface_commit(wl_surface);
+    }
+
+    fn destroyAudioPopup(self: *App) void {
+        self.audio_popup.destroy();
     }
 
     fn createWorkspacePopup(self: *App) !void {
@@ -398,7 +657,7 @@ pub const App = struct {
     }
 
     fn updateDismissOverlay(self: *App) void {
-        const keep = self.clock_popup_visible or self.workspace_popup_visible or self.launcher_popup_visible;
+        const keep = self.clock_popup_visible or self.power_popup_visible or self.battery_popup_visible or self.network_popup_visible or self.bluetooth_popup_visible or self.audio_popup_visible or self.workspace_popup_visible or self.launcher_popup_visible;
         if (!keep) {
             self.dismiss_overlay.destroy();
         }
@@ -424,6 +683,11 @@ pub const App = struct {
         if (self.panel.dirty) try self.drawSurface(&self.panel);
         if (self.dismiss_overlay.layer_surface != null and self.dismiss_overlay.dirty) try self.drawSurface(&self.dismiss_overlay);
         if (self.clock_popup_visible and self.popup.dirty) try self.drawSurface(&self.popup);
+        if (self.power_popup_visible and self.power_popup.dirty) try self.drawSurface(&self.power_popup);
+        if (self.battery_popup_visible and self.battery_popup.dirty) try self.drawSurface(&self.battery_popup);
+        if (self.network_popup_visible and self.network_popup.dirty) try self.drawSurface(&self.network_popup);
+        if (self.bluetooth_popup_visible and self.bluetooth_popup.dirty) try self.drawSurface(&self.bluetooth_popup);
+        if (self.audio_popup_visible and self.audio_popup.dirty) try self.drawSurface(&self.audio_popup);
         if (self.launcher_popup_visible and self.launcher_popup.dirty) try self.drawSurface(&self.launcher_popup);
         if (self.workspace_popup_visible and self.workspace_popup.dirty) try self.drawSurface(&self.workspace_popup);
     }
@@ -445,9 +709,14 @@ pub const App = struct {
 
         const buffer = &surface.buffer.?;
         switch (surface.role) {
-            .panel => render.drawPanel(buffer.cr, surface.width, surface.height, self.now, self.panel_hovered, self.preferences),
+            .panel => render.drawPanel(buffer.cr, surface.width, surface.height, self.now, self.panel_hovered, self.audio_state, self.battery_state, self.network_state, self.bluetooth_state, self.preferences),
             .dismiss_overlay => drawDismissOverlay(buffer.cr),
             .clock_popup => render.drawCalendarPopup(buffer.cr, surface.width, surface.height, self.month_cursor, self.now, self.preferences),
+            .power_popup => power_popup.drawPopup(buffer.cr, surface.width, surface.height, self.preferences),
+            .battery_popup => battery_popup.drawPopup(buffer.cr, surface.width, surface.height, self.battery_state, self.preferences),
+            .network_popup => network_popup.drawPopup(buffer.cr, surface.width, surface.height, self.network_state, self.preferences),
+            .bluetooth_popup => bluetooth_popup.drawPopup(buffer.cr, surface.width, surface.height, self.bluetooth_state, self.preferences),
+            .audio_popup => audio_popup.drawPopup(buffer.cr, surface.width, surface.height, self.audio_state, self.preferences),
             .launcher_popup => launcher.drawPopup(buffer.cr, surface.width, surface.height, self.launcher_entries.items),
             .workspace_popup => workspaces.drawPopup(buffer.cr, surface.width, surface.height, self.workspace_state),
         }
@@ -464,6 +733,11 @@ pub const App = struct {
                     .panel => "panel",
                     .dismiss_overlay => "dismiss-overlay",
                     .clock_popup => "clock-popup",
+                    .power_popup => "power-popup",
+                    .battery_popup => "battery-popup",
+                    .network_popup => "network-popup",
+                    .bluetooth_popup => "bluetooth-popup",
+                    .audio_popup => "audio-popup",
                     .launcher_popup => "launcher-popup",
                     .workspace_popup => "workspace-popup",
                 },
@@ -484,8 +758,57 @@ pub const App = struct {
         self.panel.dirty = true;
         if (self.dismiss_overlay.layer_surface != null) self.dismiss_overlay.dirty = true;
         if (self.clock_popup_visible) self.popup.dirty = true;
+        if (self.power_popup_visible) self.power_popup.dirty = true;
+        if (self.battery_popup_visible) self.battery_popup.dirty = true;
+        if (self.network_popup_visible) self.network_popup.dirty = true;
+        if (self.bluetooth_popup_visible) self.bluetooth_popup.dirty = true;
+        if (self.audio_popup_visible) self.audio_popup.dirty = true;
         if (self.launcher_popup_visible) self.launcher_popup.dirty = true;
         if (self.workspace_popup_visible) self.workspace_popup.dirty = true;
+    }
+
+    fn tickBluetooth(self: *App) void {
+        const now_ms = std.time.milliTimestamp();
+        const interval_ms: i64 = if (self.bluetooth_popup_visible) 1200 else 2500;
+        if (now_ms - self.last_bluetooth_refresh_ms < interval_ms) return;
+        self.last_bluetooth_refresh_ms = now_ms;
+
+        if (!bluetooth.refresh(self.allocator, &self.bluetooth_state)) return;
+        self.panel.dirty = true;
+        if (self.bluetooth_popup_visible) self.bluetooth_popup.dirty = true;
+    }
+
+    fn tickBattery(self: *App) void {
+        const now_ms = std.time.milliTimestamp();
+        const interval_ms: i64 = if (self.battery_popup_visible) 4000 else 12000;
+        if (now_ms - self.last_battery_refresh_ms < interval_ms) return;
+        self.last_battery_refresh_ms = now_ms;
+
+        if (!battery.refresh(self.allocator, &self.battery_state)) return;
+        self.panel.dirty = true;
+        if (self.battery_popup_visible) self.battery_popup.dirty = true;
+    }
+
+    fn tickNetwork(self: *App) void {
+        const now_ms = std.time.milliTimestamp();
+        const interval_ms: i64 = if (self.network_popup_visible) 1800 else 3000;
+        if (now_ms - self.last_network_refresh_ms < interval_ms) return;
+        self.last_network_refresh_ms = now_ms;
+
+        if (!network.refresh(self.allocator, &self.network_state)) return;
+        self.panel.dirty = true;
+        if (self.network_popup_visible) self.network_popup.dirty = true;
+    }
+
+    fn tickAudio(self: *App) void {
+        const now_ms = std.time.milliTimestamp();
+        const interval_ms: i64 = if (self.audio_popup_visible) 350 else 1500;
+        if (now_ms - self.last_audio_refresh_ms < interval_ms) return;
+        self.last_audio_refresh_ms = now_ms;
+
+        if (!audio.refresh(self.allocator, &self.audio_state)) return;
+        self.panel.dirty = true;
+        if (self.audio_popup_visible) self.audio_popup.dirty = true;
     }
 
     fn refreshPreferences(self: *App) bool {
@@ -535,6 +858,106 @@ pub const App = struct {
             return;
         }
 
+        if (self.pointer_role == .power_popup and self.power_popup_visible) {
+            if (power_popup.hitTest(x, y)) |target| {
+                self.runPowerAction(target);
+                self.togglePowerPopup();
+            }
+            return;
+        }
+
+        if (self.pointer_role == .battery_popup and self.battery_popup_visible) {
+            return;
+        }
+
+        if (self.pointer_role == .network_popup and self.network_popup_visible) {
+            if (network_popup.hitTest(self.network_state, x, y)) |target| {
+                switch (target) {
+                    .wifi_toggle => network.setWifiEnabled(self.allocator, !self.network_state.wifi_enabled) catch |err| {
+                        log.err("failed to toggle wifi: {}", .{err});
+                    },
+                    .network => |index| {
+                        if (index < self.network_state.networks.count) {
+                            const item = self.network_state.networks.items[index];
+                            if (!item.active) {
+                                network.connectWifi(self.allocator, self.network_state.wifiDevice(), item.ssidText()) catch |err| {
+                                    log.err("failed to connect wifi network: {}", .{err});
+                                };
+                            }
+                        }
+                    },
+                }
+                _ = network.refresh(self.allocator, &self.network_state);
+                self.last_network_refresh_ms = std.time.milliTimestamp();
+                self.panel.dirty = true;
+                self.network_popup.dirty = true;
+            }
+            return;
+        }
+
+        if (self.pointer_role == .bluetooth_popup and self.bluetooth_popup_visible) {
+            if (bluetooth_popup.hitTest(self.bluetooth_state, x, y)) |target| {
+                switch (target) {
+                    .power_toggle => bluetooth.setPowered(self.allocator, !self.bluetooth_state.powered) catch |err| {
+                        log.err("failed to toggle bluetooth power: {}", .{err});
+                    },
+                    .device => |index| {
+                        if (index < self.bluetooth_state.devices.count) {
+                            const device = self.bluetooth_state.devices.items[index];
+                            if (device.connected) {
+                                bluetooth.disconnectDevice(self.allocator, device.addressText()) catch |err| {
+                                    log.err("failed to disconnect bluetooth device: {}", .{err});
+                                };
+                            } else {
+                                bluetooth.connectDevice(self.allocator, device.addressText()) catch |err| {
+                                    log.err("failed to connect bluetooth device: {}", .{err});
+                                };
+                            }
+                        }
+                    },
+                }
+                _ = bluetooth.refresh(self.allocator, &self.bluetooth_state);
+                self.last_bluetooth_refresh_ms = std.time.milliTimestamp();
+                self.panel.dirty = true;
+                self.bluetooth_popup.dirty = true;
+            }
+            return;
+        }
+
+        if (self.pointer_role == .audio_popup and self.audio_popup_visible) {
+            if (audio_popup.hitTest(self.audio_state, x, y)) |target| {
+                switch (target) {
+                    .sink_icon => audio.toggleSinkMute(self.allocator) catch |err| log.err("failed to toggle sink mute: {}", .{err}),
+                    .source_icon => audio.toggleSourceMute(self.allocator) catch |err| log.err("failed to toggle source mute: {}", .{err}),
+                    .sink_slider => if (audio_popup.sliderValue(target, x)) |value| {
+                        audio.setSinkVolume(self.allocator, value) catch |err| log.err("failed to set sink volume: {}", .{err});
+                    },
+                    .source_slider => if (audio_popup.sliderValue(target, x)) |value| {
+                        audio.setSourceVolume(self.allocator, value) catch |err| log.err("failed to set source volume: {}", .{err});
+                    },
+                    .sink_device => |index| {
+                        if (index < self.audio_state.sinks.count) {
+                            audio.setDefaultSink(self.allocator, self.audio_state.sinks.items[index].id) catch |err| {
+                                log.err("failed to set default sink: {}", .{err});
+                            };
+                        }
+                    },
+                    .source_device => |index| {
+                        if (index < self.audio_state.sources.count) {
+                            audio.setDefaultSource(self.allocator, self.audio_state.sources.items[index].id) catch |err| {
+                                log.err("failed to set default source: {}", .{err});
+                            };
+                        }
+                    },
+                }
+                _ = audio.refresh(self.allocator, &self.audio_state);
+                self.last_audio_refresh_ms = std.time.milliTimestamp();
+                self.panel.dirty = true;
+                self.audio_popup.dirty = true;
+            }
+            return;
+        }
+
         if (self.pointer_role == .launcher_popup and self.launcher_popup_visible) {
             if (launcher.hitTest(self.launcher_entries.items, x, y)) |index| {
                 if (index >= self.launcher_entries.items.len) return;
@@ -551,12 +974,37 @@ pub const App = struct {
 
         if (self.pointer_role == .dismiss_overlay) {
             if (self.clock_popup_visible) self.toggleClockPopup();
+            if (self.power_popup_visible) self.togglePowerPopup();
+            if (self.battery_popup_visible) self.toggleBatteryPopup();
+            if (self.network_popup_visible) self.toggleNetworkPopup();
+            if (self.bluetooth_popup_visible) self.toggleBluetoothPopup();
+            if (self.audio_popup_visible) self.toggleAudioPopup();
             if (self.launcher_popup_visible) self.toggleLauncherPopup();
             if (self.workspace_popup_visible) self.toggleWorkspacePopup();
             return;
         }
 
-        const metrics = render.computePanelMetrics(self.panel.width, panel_height);
+        const metrics = render.computePanelMetrics(self.panel.width, panel_height, self.battery_state.available, self.network_state.available, self.bluetooth_state.available);
+        if (metrics.power.contains(x, y)) {
+            self.togglePowerPopup();
+            return;
+        }
+        if (self.battery_state.available and metrics.battery.contains(x, y)) {
+            self.toggleBatteryPopup();
+            return;
+        }
+        if (self.network_state.available and metrics.network.contains(x, y)) {
+            self.toggleNetworkPopup();
+            return;
+        }
+        if (self.bluetooth_state.available and metrics.bluetooth.contains(x, y)) {
+            self.toggleBluetoothPopup();
+            return;
+        }
+        if (metrics.audio.contains(x, y)) {
+            self.toggleAudioPopup();
+            return;
+        }
         if (metrics.clock.contains(x, y)) {
             self.toggleClockPopup();
             return;
@@ -576,6 +1024,11 @@ pub const App = struct {
 
         if (self.pointer_role == .panel) {
             if (self.clock_popup_visible) self.toggleClockPopup();
+            if (self.power_popup_visible) self.togglePowerPopup();
+            if (self.battery_popup_visible) self.toggleBatteryPopup();
+            if (self.network_popup_visible) self.toggleNetworkPopup();
+            if (self.bluetooth_popup_visible) self.toggleBluetoothPopup();
+            if (self.audio_popup_visible) self.toggleAudioPopup();
             if (self.launcher_popup_visible) self.toggleLauncherPopup();
             if (self.workspace_popup_visible) self.toggleWorkspacePopup();
         }
@@ -614,6 +1067,104 @@ pub const App = struct {
         }
     }
 
+    fn togglePowerPopup(self: *App) void {
+        if (!self.power_popup_visible) self.closeOtherPopups(.power_popup);
+        self.power_popup_visible = !self.power_popup_visible;
+        if (self.power_popup_visible) {
+            self.createPowerPopup() catch |err| {
+                self.power_popup_visible = false;
+                log.err("failed to create power popup: {}", .{err});
+                return;
+            };
+            self.panel.dirty = true;
+            self.power_popup.dirty = true;
+        } else {
+            self.destroyPowerPopup();
+            self.panel.dirty = true;
+            self.updateDismissOverlay();
+        }
+    }
+
+    fn toggleBatteryPopup(self: *App) void {
+        if (!self.battery_popup_visible) self.closeOtherPopups(.battery_popup);
+        self.battery_popup_visible = !self.battery_popup_visible;
+        if (self.battery_popup_visible) {
+            _ = battery.refresh(self.allocator, &self.battery_state);
+            self.last_battery_refresh_ms = std.time.milliTimestamp();
+            self.createBatteryPopup() catch |err| {
+                self.battery_popup_visible = false;
+                log.err("failed to create battery popup: {}", .{err});
+                return;
+            };
+            self.panel.dirty = true;
+            self.battery_popup.dirty = true;
+        } else {
+            self.destroyBatteryPopup();
+            self.panel.dirty = true;
+            self.updateDismissOverlay();
+        }
+    }
+
+    fn toggleNetworkPopup(self: *App) void {
+        if (!self.network_popup_visible) self.closeOtherPopups(.network_popup);
+        self.network_popup_visible = !self.network_popup_visible;
+        if (self.network_popup_visible) {
+            _ = network.refresh(self.allocator, &self.network_state);
+            self.last_network_refresh_ms = std.time.milliTimestamp();
+            self.createNetworkPopup() catch |err| {
+                self.network_popup_visible = false;
+                log.err("failed to create network popup: {}", .{err});
+                return;
+            };
+            self.panel.dirty = true;
+            self.network_popup.dirty = true;
+        } else {
+            self.destroyNetworkPopup();
+            self.panel.dirty = true;
+            self.updateDismissOverlay();
+        }
+    }
+
+    fn toggleBluetoothPopup(self: *App) void {
+        if (!self.bluetooth_popup_visible) self.closeOtherPopups(.bluetooth_popup);
+        self.bluetooth_popup_visible = !self.bluetooth_popup_visible;
+        if (self.bluetooth_popup_visible) {
+            _ = bluetooth.refresh(self.allocator, &self.bluetooth_state);
+            self.last_bluetooth_refresh_ms = std.time.milliTimestamp();
+            self.createBluetoothPopup() catch |err| {
+                self.bluetooth_popup_visible = false;
+                log.err("failed to create bluetooth popup: {}", .{err});
+                return;
+            };
+            self.panel.dirty = true;
+            self.bluetooth_popup.dirty = true;
+        } else {
+            self.destroyBluetoothPopup();
+            self.panel.dirty = true;
+            self.updateDismissOverlay();
+        }
+    }
+
+    fn toggleAudioPopup(self: *App) void {
+        if (!self.audio_popup_visible) self.closeOtherPopups(.audio_popup);
+        self.audio_popup_visible = !self.audio_popup_visible;
+        if (self.audio_popup_visible) {
+            _ = audio.refresh(self.allocator, &self.audio_state);
+            self.last_audio_refresh_ms = std.time.milliTimestamp();
+            self.createAudioPopup() catch |err| {
+                self.audio_popup_visible = false;
+                log.err("failed to create audio popup: {}", .{err});
+                return;
+            };
+            self.panel.dirty = true;
+            self.audio_popup.dirty = true;
+        } else {
+            self.destroyAudioPopup();
+            self.panel.dirty = true;
+            self.updateDismissOverlay();
+        }
+    }
+
     fn toggleWorkspacePopup(self: *App) void {
         if (!self.workspace_popup_visible) self.closeOtherPopups(.workspace_popup);
         self.workspace_popup_visible = !self.workspace_popup_visible;
@@ -633,6 +1184,11 @@ pub const App = struct {
 
     fn closeOtherPopups(self: *App, keep: SurfaceRole) void {
         if (keep != .clock_popup and self.clock_popup_visible) self.toggleClockPopup();
+        if (keep != .power_popup and self.power_popup_visible) self.togglePowerPopup();
+        if (keep != .battery_popup and self.battery_popup_visible) self.toggleBatteryPopup();
+        if (keep != .network_popup and self.network_popup_visible) self.toggleNetworkPopup();
+        if (keep != .bluetooth_popup and self.bluetooth_popup_visible) self.toggleBluetoothPopup();
+        if (keep != .audio_popup and self.audio_popup_visible) self.toggleAudioPopup();
         if (keep != .launcher_popup and self.launcher_popup_visible) self.toggleLauncherPopup();
         if (keep != .workspace_popup and self.workspace_popup_visible) self.toggleWorkspacePopup();
     }
@@ -646,6 +1202,24 @@ pub const App = struct {
         try child.spawn();
     }
 
+    fn runPowerAction(self: *App, target: power_popup.Target) void {
+        const command: []const u8 = if (target == @field(power_popup.Target, "settings"))
+            "exec \"$AXIA_BIN_DIR/axia-settings\""
+        else if (target == @field(power_popup.Target, "lock"))
+            "loginctl lock-session \"$XDG_SESSION_ID\""
+        else if (target == @field(power_popup.Target, "logout"))
+            "loginctl terminate-session \"$XDG_SESSION_ID\""
+        else if (target == @field(power_popup.Target, "suspend_action"))
+            "systemctl suspend"
+        else if (target == @field(power_popup.Target, "restart_action"))
+            "systemctl reboot"
+        else
+            "systemctl poweroff";
+        self.spawnCommand(command) catch |err| {
+            log.err("failed to run power action {s}: {}", .{@tagName(target), err});
+        };
+    }
+
     fn refreshWorkspaceState(self: *App) void {
         const socket_path = self.ipc_socket_path orelse return;
         self.workspace_state = ipc.getWorkspaceState(self.allocator, socket_path) catch self.workspace_state;
@@ -653,7 +1227,7 @@ pub const App = struct {
 
     fn updatePanelHover(self: *App) void {
         const new_hovered = if (self.pointer_role == .panel)
-            render.panelHoverAt(self.panel.width, panel_height, self.pointer_x, self.pointer_y)
+            render.panelHoverAt(self.panel.width, panel_height, self.battery_state.available, self.network_state.available, self.bluetooth_state.available, self.pointer_x, self.pointer_y)
         else
             render.HoverTarget.none;
 
@@ -733,6 +1307,11 @@ pub const App = struct {
             .panel => default_output_width,
             .dismiss_overlay => default_output_width,
             .clock_popup => popup_width,
+            .power_popup => power_popup.popup_width,
+            .battery_popup => battery_popup.popup_width,
+            .network_popup => network_popup.popup_width,
+            .bluetooth_popup => bluetooth_popup.popup_width,
+            .audio_popup => audio_popup.popup_width,
             .launcher_popup => launcher.popup_width,
             .workspace_popup => workspaces.popup_width,
         } else width;
@@ -740,6 +1319,11 @@ pub const App = struct {
             .panel => panel_height,
             .dismiss_overlay => 720,
             .clock_popup => popup_height,
+            .power_popup => power_popup.popup_height,
+            .battery_popup => battery_popup.popup_height,
+            .network_popup => network_popup.popup_height,
+            .bluetooth_popup => bluetooth_popup.popup_height,
+            .audio_popup => audio_popup.popup_height,
             .launcher_popup => launcher.popup_height,
             .workspace_popup => workspaces.popup_height,
         } else height;
@@ -753,6 +1337,11 @@ pub const App = struct {
                     .panel => "panel",
                     .dismiss_overlay => "dismiss-overlay",
                     .clock_popup => "clock-popup",
+                    .power_popup => "power-popup",
+                    .battery_popup => "battery-popup",
+                    .network_popup => "network-popup",
+                    .bluetooth_popup => "bluetooth-popup",
+                    .audio_popup => "audio-popup",
                     .launcher_popup => "launcher-popup",
                     .workspace_popup => "workspace-popup",
                 },
@@ -786,6 +1375,16 @@ pub const App = struct {
             app.pointer_role = .dismiss_overlay;
         } else if (app.popup.wl_surface != null and app.popup.wl_surface.? == wl_surface) {
             app.pointer_role = .clock_popup;
+        } else if (app.power_popup.wl_surface != null and app.power_popup.wl_surface.? == wl_surface) {
+            app.pointer_role = .power_popup;
+        } else if (app.battery_popup.wl_surface != null and app.battery_popup.wl_surface.? == wl_surface) {
+            app.pointer_role = .battery_popup;
+        } else if (app.network_popup.wl_surface != null and app.network_popup.wl_surface.? == wl_surface) {
+            app.pointer_role = .network_popup;
+        } else if (app.bluetooth_popup.wl_surface != null and app.bluetooth_popup.wl_surface.? == wl_surface) {
+            app.pointer_role = .bluetooth_popup;
+        } else if (app.audio_popup.wl_surface != null and app.audio_popup.wl_surface.? == wl_surface) {
+            app.pointer_role = .audio_popup;
         } else if (app.launcher_popup.wl_surface != null and app.launcher_popup.wl_surface.? == wl_surface) {
             app.pointer_role = .launcher_popup;
         } else if (app.workspace_popup.wl_surface != null and app.workspace_popup.wl_surface.? == wl_surface) {

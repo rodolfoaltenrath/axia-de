@@ -46,6 +46,9 @@ pub const EntryView = struct {
 pub const Snapshot = struct {
     current_dir: []const u8 = "",
     selected_path: []const u8 = "",
+    selected_visible: bool = false,
+    selected_visible_index: usize = 0,
+    selected_is_file: bool = false,
     count: usize = 0,
     total_count: usize = 0,
     page_start: usize = 0,
@@ -235,6 +238,28 @@ pub const Browser = struct {
         return self.entries.items[index];
     }
 
+    pub fn selectedPath(self: *const Browser) ?[]const u8 {
+        return self.selected_path;
+    }
+
+    pub fn hasSelectedFile(self: *const Browser) bool {
+        if (self.selected_path == null) return false;
+        for (self.entries.items) |entry| {
+            if (std.mem.eql(u8, entry.path, self.selected_path.?) and entry.kind == .file) return true;
+        }
+        return false;
+    }
+
+    pub fn isSelectedPath(self: *const Browser, path: []const u8) bool {
+        return self.selected_path != null and std.mem.eql(u8, self.selected_path.?, path);
+    }
+
+    pub fn selectVisible(self: *Browser, visible_index: usize) !void {
+        const entry = self.visibleEntry(visible_index) orelse return;
+        if (self.selected_path) |selected| self.allocator.free(selected);
+        self.selected_path = try self.allocator.dupe(u8, entry.path);
+    }
+
     pub fn activateVisible(self: *Browser, visible_index: usize) !void {
         const entry = self.visibleEntry(visible_index) orelse return;
         switch (entry.kind) {
@@ -255,6 +280,7 @@ pub const Browser = struct {
         state.has_previous = self.page_start > 0;
         state.has_next = self.page_start + visible_entry_count < self.entries.items.len;
         state.modified_descending = self.modified_descending;
+        state.selected_is_file = self.hasSelectedFile();
 
         const end = @min(self.entries.items.len, self.page_start + visible_entry_count);
         state.count = end - self.page_start;
@@ -272,6 +298,10 @@ pub const Browser = struct {
                 entry,
                 state.entries[visible_index].size[0..],
             );
+            if (self.selected_path != null and std.mem.eql(u8, entry.path, self.selected_path.?)) {
+                state.selected_visible = true;
+                state.selected_visible_index = visible_index;
+            }
         }
         return state;
     }

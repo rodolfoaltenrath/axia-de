@@ -9,6 +9,7 @@ const log = std.log.scoped(.axia_files);
 
 const width: u32 = 920;
 const height: u32 = 580;
+const double_click_threshold_ms: i64 = 380;
 
 pub const Mode = enum {
     browser,
@@ -37,6 +38,8 @@ pub const App = struct {
     pointer_y: f64 = 0,
     hovered: render.Hit = .none,
     last_button_serial: u32 = 0,
+    last_clicked_path: ?[]u8 = null,
+    last_click_ms: i64 = 0,
     maximized: bool = false,
     sidebar_collapsed: bool = false,
     mode: Mode = .browser,
@@ -98,6 +101,7 @@ pub const App = struct {
         if (self.wm_base) |wm_base| c.xdg_wm_base_destroy(wm_base);
         if (self.shm) |shm| c.wl_shm_destroy(shm);
         if (self.compositor) |compositor| c.wl_compositor_destroy(compositor);
+        if (self.last_clicked_path) |path| self.allocator.free(path);
         self.icons.deinit();
         self.browser.deinit();
         c.wl_registry_destroy(self.registry);
@@ -179,6 +183,7 @@ pub const App = struct {
             self.pointer_y,
             self.browser.snapshot(),
             self.sidebar_collapsed,
+            self.mode == .wallpaper_picker,
         );
         if (!hitEquals(new_hovered, self.hovered)) {
             self.hovered = new_hovered;
@@ -209,6 +214,7 @@ pub const App = struct {
             .close => self.running = false,
             .toggle_sidebar => self.sidebar_collapsed = !self.sidebar_collapsed,
             .up => self.browser.goParent() catch {},
+            .open_selected => self.openSelectedPath(),
             .previous => self.browser.previousPage(),
             .next => self.browser.nextPage(),
             .sort_modified => self.browser.toggleModifiedSort(),
@@ -217,11 +223,25 @@ pub const App = struct {
                 if (self.mode == .wallpaper_picker) {
                     self.handleWallpaperPickerEntry(index);
                 } else {
-                    self.browser.activateVisible(index) catch {};
+                    self.handleBrowserEntry(index);
                 }
             },
         }
         self.dirty = true;
+    }
+
+    fn handleBrowserEntry(self: *App, index: usize) void {
+        const entry = self.browser.visibleEntry(index) orelse return;
+        const clicked_twice = self.registerEntryClick(entry.path);
+        if (clicked_twice) {
+            switch (entry.kind) {
+                .directory => self.browser.openDirectory(entry.path) catch {},
+                .file => self.openPathDefault(entry.path),
+            }
+            return;
+        }
+
+        self.browser.selectVisible(index) catch {};
     }
 
     fn handleWallpaperPickerEntry(self: *App, index: usize) void {
@@ -233,6 +253,47 @@ pub const App = struct {
                 self.running = false;
             },
         }
+    }
+
+    fn openSelectedPath(self: *App) void {
+        const path = self.browser.selectedPath() orelse return;
+        self.openPathDefault(path);
+    }
+
+    fn registerEntryClick(self: *App, path: []const u8) bool {
+        const now_ms = std.time.milliTimestamp();
+        const repeated = self.last_clicked_path != null and
+            std.mem.eql(u8, self.last_clicked_path.?, path) and
+            now_ms - self.last_click_ms <= double_click_threshold_ms;
+
+        if (self.last_clicked_path) |existing| self.allocator.free(existing);
+        self.last_clicked_path = self.allocator.dupe(u8, path) catch null;
+        self.last_click_ms = now_ms;
+        return repeated;
+    }
+
+    fn openPathDefault(self: *App, path: []const u8) void {
+        const fallbacks = [_][]const []const u8{
+            &.{ "xdg-open", path },
+            &.{ "gio", "open", path },
+        };
+
+        for (fallbacks) |argv| {
+            var child = std.process.Child.init(argv, self.allocator);
+            child.stdin_behavior = .Ignore;
+            child.stdout_behavior = .Ignore;
+            child.stderr_behavior = .Ignore;
+            child.spawn() catch |err| switch (err) {
+                error.FileNotFound => continue,
+                else => {
+                    log.err("failed to open file with default app: {}", .{err});
+                    return;
+                },
+            };
+            return;
+        }
+
+        log.err("no default opener found for files app", .{});
     }
 
     fn setSeat(self: *App, seat: *c.struct_wl_seat) void {
@@ -371,6 +432,7 @@ fn hitEquals(lhs: render.Hit, rhs: render.Hit) bool {
         .close => rhs == .close,
         .toggle_sidebar => rhs == .toggle_sidebar,
         .up => rhs == .up,
+        .open_selected => rhs == .open_selected,
         .previous => rhs == .previous,
         .next => rhs == .next,
         .sort_modified => rhs == .sort_modified,
