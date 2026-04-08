@@ -112,6 +112,17 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     launcher_state_module.addImport("runtime_catalog", runtime_catalog_module);
+    const toast_model_module = b.createModule(.{
+        .root_source_file = b.path("src/toast/model.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const toast_client_module = b.createModule(.{
+        .root_source_file = b.path("src/toast/client.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    toast_client_module.addImport("toast_model", toast_model_module);
 
     const exe = b.addExecutable(.{
         .name = "axia-de",
@@ -157,6 +168,8 @@ pub fn build(b: *std.Build) void {
     panel_exe.root_module.addImport("launcher_state", launcher_state_module);
     panel_exe.root_module.addImport("axia_prefs", prefs_module);
     panel_exe.root_module.addImport("settings_model", settings_model_module);
+    panel_exe.root_module.addImport("toast_model", toast_model_module);
+    panel_exe.root_module.addImport("toast_client", toast_client_module);
     panel_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     panel_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     panel_exe.step.dependOn(&gen_layer_shell_client_header.step);
@@ -245,6 +258,8 @@ pub fn build(b: *std.Build) void {
     files_app_exe.root_module.addImport("client_wl", client_wl_module);
     files_app_exe.root_module.addImport("client_buffer", client_buffer_module);
     files_app_exe.root_module.addImport("client_chrome", client_chrome_module);
+    files_app_exe.root_module.addImport("toast_model", toast_model_module);
+    files_app_exe.root_module.addImport("toast_client", toast_client_module);
     files_app_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     files_app_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     files_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
@@ -255,6 +270,7 @@ pub fn build(b: *std.Build) void {
     files_app_exe.addCSourceFile(.{ .file = xdg_shell_client_code });
     files_app_exe.linkSystemLibrary("wayland-client");
     files_app_exe.linkSystemLibrary("cairo");
+    files_app_exe.linkSystemLibrary("xkbcommon");
     b.installArtifact(files_app_exe);
 
     const settings_app_exe = b.addExecutable(.{
@@ -273,6 +289,8 @@ pub fn build(b: *std.Build) void {
     settings_app_exe.root_module.addImport("settings_files", settings_files_module);
     settings_app_exe.root_module.addImport("settings_picker", settings_picker_module);
     settings_app_exe.root_module.addImport("axia_prefs", prefs_module);
+    settings_app_exe.root_module.addImport("toast_model", toast_model_module);
+    settings_app_exe.root_module.addImport("toast_client", toast_client_module);
     settings_app_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     settings_app_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     settings_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });

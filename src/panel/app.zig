@@ -8,6 +8,7 @@ const bluetooth_popup = @import("bluetooth_popup.zig");
 const network = @import("network.zig");
 const network_popup = @import("network_popup.zig");
 const power_popup = @import("power_popup.zig");
+const toast_popup = @import("toast_popup.zig");
 const c = @import("wl.zig").c;
 const buffer_mod = @import("buffer.zig");
 const calendar = @import("calendar.zig");
@@ -19,6 +20,7 @@ const launcher_state = @import("launcher_state");
 const prefs = @import("axia_prefs");
 const settings_model = @import("settings_model");
 const runtime_catalog = @import("runtime_catalog");
+const toast_model = @import("toast_model");
 
 const log = std.log.scoped(.axia_panel);
 const default_output_width: u32 = 1366;
@@ -34,6 +36,7 @@ const SurfaceRole = enum {
     audio_popup,
     launcher_popup,
     workspace_popup,
+    toast_popup,
 };
 
 const SurfaceState = struct {
@@ -101,7 +104,9 @@ pub const App = struct {
     battery_state: battery.State = .{},
     network_state: network.State = .{},
     bluetooth_state: bluetooth.State = .{},
+    toast_state: toast_model.State = .{},
     last_audio_refresh_ms: i64 = 0,
+    last_toast_refresh_ms: i64 = 0,
     last_battery_refresh_ms: i64 = 0,
     last_network_refresh_ms: i64 = 0,
     last_bluetooth_refresh_ms: i64 = 0,
@@ -115,6 +120,7 @@ pub const App = struct {
     audio_popup: SurfaceState = .{ .role = .audio_popup },
     launcher_popup: SurfaceState = .{ .role = .launcher_popup },
     workspace_popup: SurfaceState = .{ .role = .workspace_popup },
+    toast_popup: SurfaceState = .{ .role = .toast_popup },
     workspace_state: ipc.WorkspaceState = .{},
     catalog: runtime_catalog.Catalog,
     launcher_entries: std.ArrayListUnmanaged(runtime_catalog.AppEntry) = .empty,
@@ -159,6 +165,7 @@ pub const App = struct {
         _ = network.refresh(allocator, &app.network_state);
         _ = bluetooth.refresh(allocator, &app.bluetooth_state);
         app.last_audio_refresh_ms = std.time.milliTimestamp();
+        app.last_toast_refresh_ms = app.last_audio_refresh_ms;
         app.last_battery_refresh_ms = app.last_audio_refresh_ms;
         app.last_network_refresh_ms = app.last_audio_refresh_ms;
         app.last_bluetooth_refresh_ms = app.last_audio_refresh_ms;
@@ -183,6 +190,7 @@ pub const App = struct {
     pub fn deinit(self: *App) void {
         self.workspace_popup.destroy();
         self.launcher_popup.destroy();
+        self.toast_popup.destroy();
         self.power_popup.destroy();
         self.battery_popup.destroy();
         self.network_popup.destroy();
@@ -218,6 +226,7 @@ pub const App = struct {
             self.tickNetwork();
             self.tickBluetooth();
             self.tickAudio();
+            self.tickToasts();
             try self.redrawIfNeeded();
 
             if (c.wl_display_dispatch_pending(self.display) < 0) {
@@ -617,6 +626,46 @@ pub const App = struct {
         self.launcher_popup.destroy();
     }
 
+    fn createToastPopup(self: *App) !void {
+        if (self.toast_popup.layer_surface != null) return;
+
+        const compositor = self.compositor orelse return error.CompositorMissing;
+        const layer_shell = self.layer_shell orelse return error.LayerShellMissing;
+
+        const wl_surface = c.wl_compositor_create_surface(compositor) orelse return error.SurfaceCreateFailed;
+        errdefer c.wl_surface_destroy(wl_surface);
+
+        const layer_surface = c.zwlr_layer_shell_v1_get_layer_surface(
+            layer_shell,
+            wl_surface,
+            null,
+            c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+            "axia-panel-toast",
+        ) orelse return error.LayerSurfaceCreateFailed;
+
+        c.zwlr_layer_surface_v1_set_anchor(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
+        );
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 12, 18, 0, 0);
+        c.zwlr_layer_surface_v1_set_size(layer_surface, toast_popup.popup_width, toast_popup.popup_height);
+        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
+        c.zwlr_layer_surface_v1_set_keyboard_interactivity(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE,
+        );
+
+        self.toast_popup.wl_surface = wl_surface;
+        self.toast_popup.layer_surface = layer_surface;
+        self.toast_popup.dirty = true;
+        self.installSurfaceListeners(&self.toast_popup);
+        c.wl_surface_commit(wl_surface);
+    }
+
+    fn destroyToastPopup(self: *App) void {
+        self.toast_popup.destroy();
+    }
+
     fn ensureDismissOverlay(self: *App) !void {
         if (self.dismiss_overlay.layer_surface != null) return;
 
@@ -690,6 +739,7 @@ pub const App = struct {
         if (self.audio_popup_visible and self.audio_popup.dirty) try self.drawSurface(&self.audio_popup);
         if (self.launcher_popup_visible and self.launcher_popup.dirty) try self.drawSurface(&self.launcher_popup);
         if (self.workspace_popup_visible and self.workspace_popup.dirty) try self.drawSurface(&self.workspace_popup);
+        if (self.toast_popup.layer_surface != null and self.toast_popup.dirty) try self.drawSurface(&self.toast_popup);
     }
 
     fn drawSurface(self: *App, surface: *SurfaceState) !void {
@@ -719,6 +769,7 @@ pub const App = struct {
             .audio_popup => audio_popup.drawPopup(buffer.cr, surface.width, surface.height, self.audio_state, self.preferences),
             .launcher_popup => launcher.drawPopup(buffer.cr, surface.width, surface.height, self.launcher_entries.items),
             .workspace_popup => workspaces.drawPopup(buffer.cr, surface.width, surface.height, self.workspace_state),
+            .toast_popup => toast_popup.drawPopup(buffer.cr, surface.width, surface.height, self.toast_state, self.preferences),
         }
 
         c.cairo_surface_flush(buffer.surface);
@@ -740,6 +791,7 @@ pub const App = struct {
                     .audio_popup => "audio-popup",
                     .launcher_popup => "launcher-popup",
                     .workspace_popup => "workspace-popup",
+                    .toast_popup => "toast-popup",
                 },
                 surface.width,
                 surface.height,
@@ -811,6 +863,24 @@ pub const App = struct {
         if (self.audio_popup_visible) self.audio_popup.dirty = true;
     }
 
+    fn tickToasts(self: *App) void {
+        const socket_path = self.ipc_socket_path orelse return;
+        const now_ms = std.time.milliTimestamp();
+        if (now_ms - self.last_toast_refresh_ms < 180) return;
+        self.last_toast_refresh_ms = now_ms;
+
+        const next = ipc.getToasts(self.allocator, socket_path) catch return;
+        if (toast_model.equal(self.toast_state, next)) return;
+
+        self.toast_state = next;
+        if (self.toast_state.count > 0) {
+            self.createToastPopup() catch return;
+            self.toast_popup.dirty = true;
+        } else {
+            self.destroyToastPopup();
+        }
+    }
+
     fn refreshPreferences(self: *App) bool {
         var loaded = prefs.load(self.allocator) catch return false;
         defer loaded.deinit();
@@ -873,8 +943,12 @@ pub const App = struct {
         if (self.pointer_role == .network_popup and self.network_popup_visible) {
             if (network_popup.hitTest(self.network_state, x, y)) |target| {
                 switch (target) {
-                    .wifi_toggle => network.setWifiEnabled(self.allocator, !self.network_state.wifi_enabled) catch |err| {
-                        log.err("failed to toggle wifi: {}", .{err});
+                    .wifi_toggle => {
+                        const enabled = !self.network_state.wifi_enabled;
+                        network.setWifiEnabled(self.allocator, enabled) catch |err| {
+                            log.err("failed to toggle wifi: {}", .{err});
+                            return;
+                        };
                     },
                     .network => |index| {
                         if (index < self.network_state.networks.count) {
@@ -882,6 +956,7 @@ pub const App = struct {
                             if (!item.active) {
                                 network.connectWifi(self.allocator, self.network_state.wifiDevice(), item.ssidText()) catch |err| {
                                     log.err("failed to connect wifi network: {}", .{err});
+                                    return;
                                 };
                             }
                         }
@@ -898,8 +973,12 @@ pub const App = struct {
         if (self.pointer_role == .bluetooth_popup and self.bluetooth_popup_visible) {
             if (bluetooth_popup.hitTest(self.bluetooth_state, x, y)) |target| {
                 switch (target) {
-                    .power_toggle => bluetooth.setPowered(self.allocator, !self.bluetooth_state.powered) catch |err| {
-                        log.err("failed to toggle bluetooth power: {}", .{err});
+                    .power_toggle => {
+                        const powered = !self.bluetooth_state.powered;
+                        bluetooth.setPowered(self.allocator, powered) catch |err| {
+                            log.err("failed to toggle bluetooth power: {}", .{err});
+                            return;
+                        };
                     },
                     .device => |index| {
                         if (index < self.bluetooth_state.devices.count) {
@@ -907,10 +986,12 @@ pub const App = struct {
                             if (device.connected) {
                                 bluetooth.disconnectDevice(self.allocator, device.addressText()) catch |err| {
                                     log.err("failed to disconnect bluetooth device: {}", .{err});
+                                    return;
                                 };
                             } else {
                                 bluetooth.connectDevice(self.allocator, device.addressText()) catch |err| {
                                     log.err("failed to connect bluetooth device: {}", .{err});
+                                    return;
                                 };
                             }
                         }
@@ -927,8 +1008,12 @@ pub const App = struct {
         if (self.pointer_role == .audio_popup and self.audio_popup_visible) {
             if (audio_popup.hitTest(self.audio_state, x, y)) |target| {
                 switch (target) {
-                    .sink_icon => audio.toggleSinkMute(self.allocator) catch |err| log.err("failed to toggle sink mute: {}", .{err}),
-                    .source_icon => audio.toggleSourceMute(self.allocator) catch |err| log.err("failed to toggle source mute: {}", .{err}),
+                    .sink_icon => audio.toggleSinkMute(self.allocator) catch |err| {
+                        log.err("failed to toggle sink mute: {}", .{err});
+                    },
+                    .source_icon => audio.toggleSourceMute(self.allocator) catch |err| {
+                        log.err("failed to toggle source mute: {}", .{err});
+                    },
                     .sink_slider => if (audio_popup.sliderValue(target, x)) |value| {
                         audio.setSinkVolume(self.allocator, value) catch |err| log.err("failed to set sink volume: {}", .{err});
                     },
@@ -939,6 +1024,7 @@ pub const App = struct {
                         if (index < self.audio_state.sinks.count) {
                             audio.setDefaultSink(self.allocator, self.audio_state.sinks.items[index].id) catch |err| {
                                 log.err("failed to set default sink: {}", .{err});
+                                return;
                             };
                         }
                     },
@@ -946,6 +1032,7 @@ pub const App = struct {
                         if (index < self.audio_state.sources.count) {
                             audio.setDefaultSource(self.allocator, self.audio_state.sources.items[index].id) catch |err| {
                                 log.err("failed to set default source: {}", .{err});
+                                return;
                             };
                         }
                     },
@@ -969,6 +1056,10 @@ pub const App = struct {
                 };
                 self.toggleLauncherPopup();
             }
+            return;
+        }
+
+        if (self.pointer_role == .toast_popup) {
             return;
         }
 
@@ -1314,6 +1405,7 @@ pub const App = struct {
             .audio_popup => audio_popup.popup_width,
             .launcher_popup => launcher.popup_width,
             .workspace_popup => workspaces.popup_width,
+            .toast_popup => toast_popup.popup_width,
         } else width;
         surface.height = if (height == 0) switch (surface.role) {
             .panel => panel_height,
@@ -1326,6 +1418,7 @@ pub const App = struct {
             .audio_popup => audio_popup.popup_height,
             .launcher_popup => launcher.popup_height,
             .workspace_popup => workspaces.popup_height,
+            .toast_popup => toast_popup.popup_height,
         } else height;
         surface.configured = true;
         surface.mapped = true;
@@ -1344,6 +1437,7 @@ pub const App = struct {
                     .audio_popup => "audio-popup",
                     .launcher_popup => "launcher-popup",
                     .workspace_popup => "workspace-popup",
+                    .toast_popup => "toast-popup",
                 },
                 surface.width,
                 surface.height,

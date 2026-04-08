@@ -31,7 +31,6 @@ pub const SidebarIcons = struct {
 
     fn assetPathFor(target: browser.SidebarTarget) []const u8 {
         return switch (target) {
-            .recents => "assets/icons/files/recentes.png",
             .home => "assets/icons/files/home.png",
             .documents => "assets/icons/files/documentos.png",
             .downloads => "assets/icons/files/downloads.png",

@@ -1,4 +1,5 @@
 const std = @import("std");
+const toast_model = @import("toast_model");
 
 pub const WorkspaceState = struct {
     current: usize = 0,
@@ -42,6 +43,12 @@ pub fn moveFocusedToWorkspace(allocator: std.mem.Allocator, socket_path: []const
 pub fn toggleLauncher(allocator: std.mem.Allocator, socket_path: []const u8) !void {
     const response = try request(allocator, socket_path, "launcher toggle\n");
     defer allocator.free(response);
+}
+
+pub fn getToasts(allocator: std.mem.Allocator, socket_path: []const u8) !toast_model.State {
+    const response = try request(allocator, socket_path, "toast get\n");
+    defer allocator.free(response);
+    return parseToastState(response);
 }
 
 fn request(allocator: std.mem.Allocator, socket_path: []const u8, payload: []const u8) ![]u8 {
@@ -105,5 +112,39 @@ fn parseWorkspaceState(response: []const u8) !WorkspaceState {
         state.summaries[index].preview_len = preview_len;
     }
 
+    return state;
+}
+
+fn parseToastState(response: []const u8) !toast_model.State {
+    var state = toast_model.State{};
+    var lines = std.mem.tokenizeScalar(u8, std.mem.trim(u8, response, " \r\n\t"), '\n');
+
+    const header = lines.next() orelse return error.InvalidResponse;
+    {
+        var tokens = std.mem.tokenizeAny(u8, header, " ");
+        const status = tokens.next() orelse return error.InvalidResponse;
+        const kind = tokens.next() orelse return error.InvalidResponse;
+        const raw_count = tokens.next() orelse return error.InvalidResponse;
+        if (!std.mem.eql(u8, status, "ok") or !std.mem.eql(u8, kind, "toasts")) return error.InvalidResponse;
+        state.count = @min(try std.fmt.parseUnsigned(usize, raw_count, 10), state.items.len);
+    }
+
+    var index: usize = 0;
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "toast ")) continue;
+        if (index >= state.items.len) break;
+
+        var tokens = std.mem.tokenizeAny(u8, line, " ");
+        _ = tokens.next();
+        const raw_id = tokens.next() orelse continue;
+        const raw_level = tokens.next() orelse continue;
+        const message = tokens.rest();
+
+        state.items[index].id = try std.fmt.parseUnsigned(u32, raw_id, 10);
+        state.items[index].level = toast_model.parseLevel(raw_level) orelse .info;
+        toast_model.copyMessage(&state.items[index], message);
+        index += 1;
+    }
+    state.count = @min(state.count, index);
     return state;
 }

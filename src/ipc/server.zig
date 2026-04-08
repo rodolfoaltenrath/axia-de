@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("../wl.zig").c;
 const default_workspace_count = @import("../shell/workspace.zig").default_workspace_count;
 const settings_model = @import("../settings/model.zig");
+const toast_model = @import("../toast/model.zig");
 
 pub const WorkspaceState = struct {
     current: usize,
@@ -39,6 +40,8 @@ pub const IpcServer = struct {
     socket_path: ?[]u8 = null,
     fd: ?std.posix.socket_t = null,
     event_source: ?*c.struct_wl_event_source = null,
+    toasts: toast_model.State = .{},
+    next_toast_id: u32 = 1,
     ctx: ?*anyopaque = null,
     get_workspace_state_cb: ?GetWorkspaceStateCallback = null,
     activate_workspace_cb: ?ActivateWorkspaceCallback = null,
@@ -308,6 +311,32 @@ pub const IpcServer = struct {
             return;
         }
 
+        if (std.mem.startsWith(u8, request, "toast show ")) {
+            const payload = std.mem.trim(u8, request["toast show ".len..], " \r\n\t");
+            var parts = std.mem.tokenizeScalar(u8, payload, ' ');
+            const raw_level = parts.next() orelse {
+                _ = std.posix.write(client_fd, "error invalid-toast\n") catch {};
+                return;
+            };
+            const message = std.mem.trimLeft(u8, payload[raw_level.len..], " ");
+            const level = toast_model.parseLevel(raw_level) orelse {
+                _ = std.posix.write(client_fd, "error invalid-toast\n") catch {};
+                return;
+            };
+            if (message.len == 0) {
+                _ = std.posix.write(client_fd, "error invalid-toast\n") catch {};
+                return;
+            }
+            self.pushToast(level, message);
+            _ = std.posix.write(client_fd, "ok\n") catch {};
+            return;
+        }
+
+        if (std.mem.eql(u8, request, "toast get")) {
+            self.writeToastState(client_fd);
+            return;
+        }
+
         _ = std.posix.write(client_fd, "error unknown-command\n") catch {};
     }
 
@@ -365,5 +394,57 @@ pub const IpcServer = struct {
         }
 
         _ = std.posix.write(client_fd, stream.getWritten()) catch {};
+    }
+
+    fn writeToastState(self: *IpcServer, client_fd: std.posix.socket_t) void {
+        self.cleanupExpiredToasts();
+
+        var response: [2048]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&response);
+        const writer = stream.writer();
+
+        writer.print("ok toasts {}\n", .{self.toasts.count}) catch return;
+        for (0..self.toasts.count) |index| {
+            const item = self.toasts.items[index];
+            writer.print(
+                "toast {} {s} {s}\n",
+                .{ item.id, toast_model.levelName(item.level), item.messageText() },
+            ) catch return;
+        }
+
+        _ = std.posix.write(client_fd, stream.getWritten()) catch {};
+    }
+
+    fn pushToast(self: *IpcServer, level: toast_model.Level, message: []const u8) void {
+        self.cleanupExpiredToasts();
+        if (self.toasts.count == self.toasts.items.len) {
+            var index: usize = 1;
+            while (index < self.toasts.count) : (index += 1) {
+                self.toasts.items[index - 1] = self.toasts.items[index];
+            }
+            self.toasts.count -= 1;
+        }
+
+        var item = toast_model.Toast{
+            .id = self.next_toast_id,
+            .level = level,
+            .created_ms = std.time.milliTimestamp(),
+        };
+        self.next_toast_id +%= 1;
+        toast_model.copyMessage(&item, message);
+        self.toasts.items[self.toasts.count] = item;
+        self.toasts.count += 1;
+    }
+
+    fn cleanupExpiredToasts(self: *IpcServer) void {
+        const now_ms = std.time.milliTimestamp();
+        var write_index: usize = 0;
+        for (0..self.toasts.count) |index| {
+            const item = self.toasts.items[index];
+            if (now_ms - item.created_ms >= item.duration_ms) continue;
+            self.toasts.items[write_index] = item;
+            write_index += 1;
+        }
+        self.toasts.count = write_index;
     }
 };

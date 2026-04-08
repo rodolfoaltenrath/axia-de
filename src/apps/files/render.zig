@@ -16,6 +16,24 @@ const footer_height = 34.0;
 const row_height = 40.0;
 const scrollbar_width = 8.0;
 const scrollbar_gap = 8.0;
+const toolbar_button_size = 30.0;
+const toolbar_button_gap = 8.0;
+const action_button_height = 30.0;
+const action_button_gap = 10.0;
+
+pub const DialogKind = enum {
+    none,
+    new_folder,
+    rename,
+    delete_confirm,
+    delete_permanent_confirm,
+};
+
+const ActionTone = enum {
+    primary,
+    secondary,
+    danger,
+};
 
 pub const Hit = union(enum) {
     none,
@@ -25,10 +43,16 @@ pub const Hit = union(enum) {
     close,
     toggle_sidebar,
     up,
+    breadcrumb_up,
     open_selected,
+    new_folder,
+    rename_selected,
+    delete_selected,
     previous,
     next,
     sort_modified,
+    dialog_confirm,
+    dialog_cancel,
     sidebar: browser.SidebarTarget,
     entry: usize,
 };
@@ -42,6 +66,9 @@ pub fn draw(
     sidebar_collapsed: bool,
     sidebar_icons: *const icons.SidebarIcons,
     picker_mode: bool,
+    dialog_kind: DialogKind,
+    dialog_input: []const u8,
+    dialog_subject: []const u8,
 ) void {
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
@@ -56,9 +83,12 @@ pub fn draw(
     const content = contentRect(width, height, sidebar_collapsed);
 
     _ = root;
-    drawTitlebar(cr, width, height, hovered, sidebar_collapsed, picker_mode);
+    drawTitlebar(cr, width, height, snapshot, hovered, sidebar_collapsed, picker_mode);
     drawSidebar(cr, sidebar, snapshot, hovered, sidebar_collapsed, sidebar_icons);
     drawContent(cr, width, height, content, snapshot, hovered, sidebar_collapsed, picker_mode);
+    if (dialog_kind != .none) {
+        drawDialog(cr, width, height, dialog_kind, dialog_input, dialog_subject, hovered);
+    }
 }
 
 pub fn hitTest(
@@ -69,14 +99,25 @@ pub fn hitTest(
     snapshot: browser.Snapshot,
     sidebar_collapsed: bool,
     picker_mode: bool,
+    dialog_kind: DialogKind,
 ) Hit {
+    if (dialog_kind != .none) {
+        if (dialogConfirmRect(width, height).contains(x, y)) return .dialog_confirm;
+        if (dialogCancelRect(width, height).contains(x, y)) return .dialog_cancel;
+        return .none;
+    }
+
     if (closeRect(width).contains(x, y)) return .close;
     if (maximizeRect(width).contains(x, y)) return .maximize;
     if (minimizeRect(width).contains(x, y)) return .minimize;
     if (toggleSidebarRect().contains(x, y)) return .toggle_sidebar;
 
     if (upRect(width, height, sidebar_collapsed).contains(x, y)) return .up;
+    if (breadcrumbTargetRect(width, height, sidebar_collapsed, snapshot.current_dir).contains(x, y)) return .breadcrumb_up;
     if (!picker_mode and openSelectedRect(width, height, sidebar_collapsed).contains(x, y)) return .open_selected;
+    if (!picker_mode and newFolderRect(width, height, sidebar_collapsed).contains(x, y)) return .new_folder;
+    if (!picker_mode and renameRect(width, height, sidebar_collapsed).contains(x, y)) return .rename_selected;
+    if (!picker_mode and deleteRect(width, height, sidebar_collapsed).contains(x, y)) return .delete_selected;
     if (previousRect(width, height, sidebar_collapsed).contains(x, y)) return .previous;
     if (nextRect(width, height, sidebar_collapsed).contains(x, y)) return .next;
     if (modifiedHeaderRect(width, height, sidebar_collapsed).contains(x, y)) return .sort_modified;
@@ -167,17 +208,17 @@ fn closeRect(width: u32) Rect {
 
 fn previousRect(width: u32, height: u32, collapsed: bool) Rect {
     const content = contentRect(width, height, collapsed);
-    return .{ .x = content.x + 10, .y = content.y + 12, .width = 28, .height = 28 };
+    return .{ .x = content.x + 10, .y = content.y + 10, .width = toolbar_button_size, .height = toolbar_button_size };
 }
 
 fn nextRect(width: u32, height: u32, collapsed: bool) Rect {
-    const content = contentRect(width, height, collapsed);
-    return .{ .x = content.x + 40, .y = content.y + 12, .width = 28, .height = 28 };
+    const previous = previousRect(width, height, collapsed);
+    return .{ .x = previous.x + previous.width + toolbar_button_gap, .y = previous.y, .width = toolbar_button_size, .height = toolbar_button_size };
 }
 
 fn upRect(width: u32, height: u32, collapsed: bool) Rect {
-    const content = contentRect(width, height, collapsed);
-    return .{ .x = content.x + 82, .y = content.y + 12, .width = 28, .height = 28 };
+    const next = nextRect(width, height, collapsed);
+    return .{ .x = next.x + next.width + toolbar_button_gap, .y = next.y, .width = toolbar_button_size, .height = toolbar_button_size };
 }
 
 fn sidebarItemRect(sidebar: Rect, target: browser.SidebarTarget) Rect {
@@ -193,10 +234,56 @@ fn sidebarItemRect(sidebar: Rect, target: browser.SidebarTarget) Rect {
 fn openSelectedRect(width: u32, height: u32, collapsed: bool) Rect {
     const content = contentRect(width, height, collapsed);
     return .{
-        .x = content.x + content.width - 94,
+        .x = content.x + content.width - 84.0,
         .y = content.y + 10,
-        .width = 84,
-        .height = 30,
+        .width = 84.0,
+        .height = action_button_height,
+    };
+}
+
+fn deleteRect(width: u32, height: u32, collapsed: bool) Rect {
+    _ = collapsed;
+    const total_width = 108.0 + action_button_gap + 92.0;
+    const start_x = (chrome.rootRect(width, height).x + chrome.rootRect(width, height).width / 2.0) - total_width / 2.0;
+    return .{
+        .x = start_x + 108.0 + action_button_gap,
+        .y = 12,
+        .width = 92.0,
+        .height = action_button_height,
+    };
+}
+
+fn renameRect(width: u32, height: u32, collapsed: bool) Rect {
+    _ = collapsed;
+    const total_width = 108.0 + action_button_gap + 92.0;
+    const start_x = (chrome.rootRect(width, height).x + chrome.rootRect(width, height).width / 2.0) - total_width / 2.0;
+    return .{
+        .x = start_x,
+        .y = 12,
+        .width = 108.0,
+        .height = action_button_height,
+    };
+}
+
+fn newFolderRect(width: u32, height: u32, collapsed: bool) Rect {
+    const open_button = openSelectedRect(width, height, collapsed);
+    return .{
+        .x = open_button.x - 118.0 - action_button_gap,
+        .y = open_button.y,
+        .width = 118.0,
+        .height = action_button_height,
+    };
+}
+
+fn breadcrumbTargetRect(width: u32, height: u32, collapsed: bool, current_dir: []const u8) Rect {
+    const content = contentRect(width, height, collapsed);
+    const base = basenameLabel(current_dir);
+    const estimated_width = @min(220.0, 18.0 + @as(f64, @floatFromInt(base.len)) * 9.0);
+    return .{
+        .x = content.x + 232,
+        .y = content.y + 12,
+        .width = estimated_width,
+        .height = 28.0,
     };
 }
 
@@ -210,13 +297,31 @@ fn entryRect(width: u32, height: u32, index: usize, collapsed: bool) Rect {
     };
 }
 
-fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, hovered: Hit, sidebar_collapsed: bool, picker_mode: bool) void {
+fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, snapshot: browser.Snapshot, hovered: Hit, sidebar_collapsed: bool, picker_mode: bool) void {
     chrome.drawWindowShell(cr, width, height, .{
         .title = if (picker_mode) "Selecionar Wallpaper" else "Arquivos",
         .title_x = 86,
     }, hoveredControl(hovered));
     drawTopGlyphButton(cr, toggleSidebarRect(), "=", hovered == .toggle_sidebar);
     drawTopGlyphButton(cr, appGlyphRect(), if (sidebar_collapsed) ">" else "<", false);
+    if (!picker_mode) {
+        drawActionButton(
+            cr,
+            renameRect(width, height, sidebar_collapsed),
+            "Renomear",
+            snapshot.selected_exists,
+            hovered == .rename_selected,
+            .secondary,
+        );
+        drawActionButton(
+            cr,
+            deleteRect(width, height, sidebar_collapsed),
+            "Excluir",
+            snapshot.selected_exists,
+            hovered == .delete_selected,
+            .danger,
+        );
+    }
 }
 
 fn drawSidebar(
@@ -238,7 +343,7 @@ fn drawSidebar(
                 .sidebar => |target| target == item.target,
                 else => false,
             };
-        const active = matchesSidebar(snapshot.current_dir, item.target);
+        const active = matchesSidebar(snapshot.current_sidebar, item.target);
         drawCollapsedSidebarItem(cr, rect, item.icon, hovered_item or active, sidebar_icons.surfaceFor(item.target));
         }
         return;
@@ -250,10 +355,10 @@ fn drawSidebar(
             .sidebar => |target| target == item.target,
             else => false,
         };
-        const active = matchesSidebar(snapshot.current_dir, item.target);
+        const active = matchesSidebar(snapshot.current_sidebar, item.target);
         drawSidebarItem(cr, rect, item.icon, item.label, active, hovered_item, sidebar_icons.surfaceFor(item.target));
 
-        if (index == 6 or index == 7) {
+        if (index == 5 or index == 6) {
             c.cairo_rectangle(cr, sidebar.x + 18, rect.y + rect.height + 10, sidebar.width - 36, 1);
             c.cairo_set_source_rgba(cr, 1, 1, 1, 0.08);
             c.cairo_fill(cr);
@@ -273,18 +378,26 @@ fn drawContent(
 ) void {
     drawToolbarButton(cr, previousRect(width, height, sidebar_collapsed), "<", hovered == .previous);
     drawToolbarButton(cr, nextRect(width, height, sidebar_collapsed), ">", hovered == .next);
-    drawToolbarButton(cr, upRect(width, height, sidebar_collapsed), "^", hovered == .up);
+    drawToolbarButton(cr, upRect(width, height, sidebar_collapsed), "^", hovered == .up or hovered == .breadcrumb_up);
     if (!picker_mode) {
+        drawActionButton(
+            cr,
+            newFolderRect(width, height, sidebar_collapsed),
+            "Nova pasta",
+            true,
+            hovered == .new_folder,
+            .primary,
+        );
         drawActionButton(
             cr,
             openSelectedRect(width, height, sidebar_collapsed),
             "Abrir",
-            snapshot.selected_is_file,
+            snapshot.selected_exists,
             hovered == .open_selected,
+            .secondary,
         );
     }
-
-    drawBreadcrumb(cr, content, snapshot.current_dir);
+    drawBreadcrumb(cr, width, height, snapshot.current_dir, hovered == .breadcrumb_up, sidebar_collapsed);
     if (picker_mode) drawPickerHint(cr, content);
 
     const header_y = content.y + top_strip_height;
@@ -386,11 +499,20 @@ fn drawPickerHint(cr: *c.cairo_t, content: Rect) void {
     drawLabel(cr, rect.x + 14, rect.y + 21, 12.5, "Clique numa imagem para aplicar como wallpaper.", 0.82, 0.93, 0.97);
 }
 
-fn drawBreadcrumb(cr: *c.cairo_t, content: Rect, current_dir: []const u8) void {
-    const y = content.y + 34;
-    drawLabel(cr, content.x + 122, y, 15, "Pasta pessoal", 0.38, 0.88, 0.98);
-    drawLabel(cr, content.x + 234, y, 17, "/", 0.86, 0.87, 0.9);
-    drawLabel(cr, content.x + 256, y, 15, basenameLabel(current_dir), 0.38, 0.88, 0.98);
+fn drawBreadcrumb(cr: *c.cairo_t, width: u32, height: u32, current_dir: []const u8, hovered: bool, collapsed: bool) void {
+    const content = contentRect(width, height, collapsed);
+    const y = content.y + 30;
+    const breadcrumb_x = content.x + 124;
+    const separator_x = breadcrumb_x + 92;
+    drawLabel(cr, breadcrumb_x, y, 15, "Local atual", 0.70, 0.72, 0.77);
+    drawLabel(cr, separator_x, y, 17, "/", 0.86, 0.87, 0.9);
+    if (hovered) {
+        const target = breadcrumbTargetRect(width, height, collapsed, current_dir);
+        drawRoundedRect(cr, target, 8);
+        c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
+        c.cairo_fill(cr);
+    }
+    drawLabel(cr, separator_x + 24, y, 15, basenameLabel(current_dir), 0.38, 0.88, 0.98);
 }
 
 fn drawColumnHeaders(cr: *c.cairo_t, content: Rect, header_y: f64, modified_descending: bool, modified_hovered: bool) void {
@@ -466,43 +588,80 @@ fn drawEntryRow(
 
 fn drawEmptyState(cr: *c.cairo_t, content: Rect, picker_mode: bool) void {
     const center = Rect{
-        .x = content.x + (content.width - 180) / 2.0,
-        .y = content.y + 150,
-        .width = 180,
-        .height = 130,
+        .x = content.x + (content.width - 220) / 2.0,
+        .y = content.y + 138,
+        .width = 220,
+        .height = 156,
     };
 
     drawFolderGlyph(cr, .{
-        .x = center.x + 56,
-        .y = center.y + 12,
-        .width = 56,
-        .height = 44,
+        .x = center.x + 72,
+        .y = center.y + 10,
+        .width = 76,
+        .height = 58,
     });
     drawCenteredLabel(cr, .{
         .x = center.x,
-        .y = center.y + 72,
+        .y = center.y + 84,
         .width = center.width,
-        .height = 26,
-    }, 16, if (picker_mode) "Sem imagens aqui" else "Pasta vazia", 0.90, 0.91, 0.94);
+        .height = 28,
+    }, 18, "Vazio", 0.92, 0.93, 0.96);
+    if (picker_mode) {
+        drawCenteredLabel(cr, .{
+            .x = center.x,
+            .y = center.y + 114,
+            .width = center.width,
+            .height = 24,
+        }, 13, "Nenhuma imagem nesta pasta", 0.66, 0.68, 0.73);
+    }
 }
 
 fn drawFolderGlyph(cr: *c.cairo_t, rect: Rect) void {
-    drawRoundedRect(cr, .{
-        .x = rect.x + 6,
-        .y = rect.y,
-        .width = rect.width * 0.40,
-        .height = rect.height * 0.32,
-    }, 5);
-    c.cairo_set_source_rgba(cr, 0.88, 0.88, 0.89, 0.95);
+    const tab = Rect{
+        .x = rect.x + rect.width * 0.12,
+        .y = rect.y + rect.height * 0.10,
+        .width = rect.width * 0.34,
+        .height = rect.height * 0.20,
+    };
+    const back = Rect{
+        .x = rect.x + rect.width * 0.06,
+        .y = rect.y + rect.height * 0.24,
+        .width = rect.width * 0.88,
+        .height = rect.height * 0.56,
+    };
+
+    drawRoundedRect(cr, tab, @max(2.5, rect.height * 0.08));
+    c.cairo_set_source_rgba(cr, 0.99, 0.85, 0.42, 0.98);
     c.cairo_fill(cr);
 
-    drawRoundedRect(cr, .{
-        .x = rect.x,
-        .y = rect.y + rect.height * 0.18,
-        .width = rect.width,
-        .height = rect.height * 0.82,
-    }, 8);
-    c.cairo_set_source_rgba(cr, 0.88, 0.88, 0.89, 0.95);
+    drawRoundedRect(cr, back, @max(3.0, rect.height * 0.10));
+    c.cairo_set_source_rgba(cr, 0.97, 0.77, 0.22, 0.98);
+    c.cairo_fill_preserve(cr);
+    c.cairo_set_source_rgba(cr, 0.70, 0.50, 0.08, 0.18);
+    c.cairo_set_line_width(cr, 1);
+    c.cairo_stroke(cr);
+
+    c.cairo_new_sub_path(cr);
+    c.cairo_move_to(cr, rect.x + rect.width * 0.04, rect.y + rect.height * 0.44);
+    c.cairo_line_to(cr, rect.x + rect.width * 0.28, rect.y + rect.height * 0.34);
+    c.cairo_line_to(cr, rect.x + rect.width * 0.97, rect.y + rect.height * 0.34);
+    c.cairo_line_to(cr, rect.x + rect.width * 0.88, rect.y + rect.height * 0.88);
+    c.cairo_line_to(cr, rect.x + rect.width * 0.12, rect.y + rect.height * 0.88);
+    c.cairo_close_path(cr);
+    c.cairo_set_source_rgba(cr, 0.95, 0.73, 0.16, 0.99);
+    c.cairo_fill_preserve(cr);
+    c.cairo_set_source_rgba(cr, 0.66, 0.46, 0.08, 0.22);
+    c.cairo_set_line_width(cr, 1);
+    c.cairo_stroke(cr);
+
+    c.cairo_new_sub_path(cr);
+    c.cairo_move_to(cr, rect.x + rect.width * 0.09, rect.y + rect.height * 0.50);
+    c.cairo_line_to(cr, rect.x + rect.width * 0.30, rect.y + rect.height * 0.40);
+    c.cairo_line_to(cr, rect.x + rect.width * 0.90, rect.y + rect.height * 0.40);
+    c.cairo_line_to(cr, rect.x + rect.width * 0.84, rect.y + rect.height * 0.54);
+    c.cairo_line_to(cr, rect.x + rect.width * 0.14, rect.y + rect.height * 0.54);
+    c.cairo_close_path(cr);
+    c.cairo_set_source_rgba(cr, 1.0, 0.90, 0.56, 0.24);
     c.cairo_fill(cr);
 }
 
@@ -527,36 +686,223 @@ fn drawTopGlyphButton(cr: *c.cairo_t, rect: Rect, glyph: []const u8, hovered: bo
 }
 
 fn drawToolbarButton(cr: *c.cairo_t, rect: Rect, label: []const u8, hovered: bool) void {
-    if (hovered) {
-        drawRoundedRect(cr, .{
-            .x = rect.x - 2,
-            .y = rect.y - 2,
-            .width = rect.width + 4,
-            .height = rect.height + 4,
-        }, 8);
-        c.cairo_set_source_rgba(cr, 1, 1, 1, 0.06);
-        c.cairo_fill(cr);
-    }
-    drawCenteredLabel(cr, rect, 18, label, 0.94, 0.95, 0.97);
+    drawRoundedRect(cr, rect, 9);
+    c.cairo_set_source_rgba(cr, 1, 1, 1, if (hovered) 0.08 else 0.04);
+    c.cairo_fill_preserve(cr);
+    c.cairo_set_source_rgba(cr, 1, 1, 1, if (hovered) 0.08 else 0.05);
+    c.cairo_set_line_width(cr, 1);
+    c.cairo_stroke(cr);
+    drawToolbarGlyph(cr, rect, label, 0.90, 0.92, 0.96);
 }
 
-fn drawActionButton(cr: *c.cairo_t, rect: Rect, label: []const u8, enabled: bool, hovered: bool) void {
+fn drawToolbarGlyph(cr: *c.cairo_t, rect: Rect, glyph: []const u8, r: f64, g: f64, b: f64) void {
+    c.cairo_save(cr);
+    defer c.cairo_restore(cr);
+
+    c.cairo_set_source_rgb(cr, r, g, b);
+    c.cairo_set_line_width(cr, 1.8);
+    c.cairo_set_line_cap(cr, c.CAIRO_LINE_CAP_ROUND);
+    c.cairo_set_line_join(cr, c.CAIRO_LINE_JOIN_ROUND);
+
+    const cx = rect.x + rect.width / 2.0;
+    const cy = rect.y + rect.height / 2.0;
+
+    if (std.mem.eql(u8, glyph, "<")) {
+        c.cairo_move_to(cr, cx + 3.0, cy - 5.0);
+        c.cairo_line_to(cr, cx - 2.0, cy);
+        c.cairo_line_to(cr, cx + 3.0, cy + 5.0);
+        c.cairo_stroke(cr);
+        return;
+    }
+    if (std.mem.eql(u8, glyph, ">")) {
+        c.cairo_move_to(cr, cx - 3.0, cy - 5.0);
+        c.cairo_line_to(cr, cx + 2.0, cy);
+        c.cairo_line_to(cr, cx - 3.0, cy + 5.0);
+        c.cairo_stroke(cr);
+        return;
+    }
+    if (std.mem.eql(u8, glyph, "^")) {
+        c.cairo_move_to(cr, cx - 5.0, cy + 2.5);
+        c.cairo_line_to(cr, cx, cy - 3.5);
+        c.cairo_line_to(cr, cx + 5.0, cy + 2.5);
+        c.cairo_stroke(cr);
+        return;
+    }
+    if (std.mem.eql(u8, glyph, "open")) {
+        c.cairo_rectangle(cr, cx - 5.5, cy - 4.5, 8.0, 8.0);
+        c.cairo_stroke(cr);
+        c.cairo_move_to(cr, cx - 1.5, cy + 1.5);
+        c.cairo_line_to(cr, cx + 5.0, cy - 5.0);
+        c.cairo_move_to(cr, cx + 1.0, cy - 5.0);
+        c.cairo_line_to(cr, cx + 5.0, cy - 5.0);
+        c.cairo_line_to(cr, cx + 5.0, cy - 1.0);
+        c.cairo_stroke(cr);
+        return;
+    }
+    if (std.mem.eql(u8, glyph, "rename")) {
+        c.cairo_move_to(cr, cx - 4.5, cy + 4.5);
+        c.cairo_line_to(cr, cx - 1.5, cy + 1.5);
+        c.cairo_line_to(cr, cx + 4.5, cy - 4.5);
+        c.cairo_stroke(cr);
+        c.cairo_move_to(cr, cx - 4.5, cy + 4.5);
+        c.cairo_line_to(cr, cx - 0.5, cy + 3.5);
+        c.cairo_stroke(cr);
+        return;
+    }
+    if (std.mem.eql(u8, glyph, "delete")) {
+        c.cairo_move_to(cr, cx - 5.0, cy - 3.0);
+        c.cairo_line_to(cr, cx + 5.0, cy - 3.0);
+        c.cairo_move_to(cr, cx - 3.5, cy - 5.0);
+        c.cairo_line_to(cr, cx + 3.5, cy - 5.0);
+        c.cairo_move_to(cr, cx - 4.0, cy - 3.0);
+        c.cairo_line_to(cr, cx - 3.0, cy + 5.0);
+        c.cairo_line_to(cr, cx + 3.0, cy + 5.0);
+        c.cairo_line_to(cr, cx + 4.0, cy - 3.0);
+        c.cairo_stroke(cr);
+        return;
+    }
+    if (std.mem.eql(u8, glyph, "new-folder")) {
+        drawFolderGlyph(cr, .{
+            .x = rect.x + 5,
+            .y = rect.y + 7,
+            .width = 14,
+            .height = 12,
+        });
+        c.cairo_move_to(cr, cx + 4.0, cy - 1.0);
+        c.cairo_line_to(cr, cx + 4.0, cy + 5.0);
+        c.cairo_move_to(cr, cx + 1.0, cy + 2.0);
+        c.cairo_line_to(cr, cx + 7.0, cy + 2.0);
+        c.cairo_stroke(cr);
+        return;
+    }
+}
+
+fn drawActionButton(cr: *c.cairo_t, rect: Rect, label: []const u8, enabled: bool, hovered: bool, tone: ActionTone) void {
     drawRoundedRect(cr, rect, 10);
     if (enabled) {
-        c.cairo_set_source_rgba(cr, if (hovered) 0.20 else 0.16, if (hovered) 0.56 else 0.46, if (hovered) 0.76 else 0.62, if (hovered) 0.90 else 0.74);
+        const fill = switch (tone) {
+            .primary => [4]f64{ if (hovered) 0.20 else 0.16, if (hovered) 0.56 else 0.46, if (hovered) 0.76 else 0.62, if (hovered) 0.90 else 0.74 },
+            .secondary => [4]f64{ 1.0, 1.0, 1.0, if (hovered) 0.08 else 0.05 },
+            .danger => [4]f64{ 0.80, 0.26, 0.30, if (hovered) 0.28 else 0.20 },
+        };
+        c.cairo_set_source_rgba(cr, fill[0], fill[1], fill[2], fill[3]);
         c.cairo_fill_preserve(cr);
-        c.cairo_set_source_rgba(cr, 0.44, 0.88, 0.98, 0.28);
+        const stroke = switch (tone) {
+            .primary => [4]f64{ 0.44, 0.88, 0.98, 0.28 },
+            .secondary => [4]f64{ 1.0, 1.0, 1.0, 0.08 },
+            .danger => [4]f64{ 1.0, 0.46, 0.52, 0.24 },
+        };
+        c.cairo_set_source_rgba(cr, stroke[0], stroke[1], stroke[2], stroke[3]);
         c.cairo_set_line_width(cr, 1);
         c.cairo_stroke(cr);
-        drawCenteredLabel(cr, rect, 14, label, 0.95, 0.97, 1.0);
+        drawCenteredLabel(cr, rect, 13.5, label, 0.95, 0.97, 1.0);
     } else {
         c.cairo_set_source_rgba(cr, 1, 1, 1, 0.04);
         c.cairo_fill_preserve(cr);
         c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
         c.cairo_set_line_width(cr, 1);
         c.cairo_stroke(cr);
-        drawCenteredLabel(cr, rect, 14, label, 0.58, 0.60, 0.64);
+        drawCenteredLabel(cr, rect, 13.5, label, 0.58, 0.60, 0.64);
     }
+}
+
+fn drawDialog(cr: *c.cairo_t, width: u32, height: u32, kind: DialogKind, input: []const u8, subject: []const u8, hovered: Hit) void {
+    const overlay = rootRect(width, height);
+    c.cairo_rectangle(cr, overlay.x, overlay.y, overlay.width, overlay.height);
+    c.cairo_set_source_rgba(cr, 0.01, 0.02, 0.04, 0.58);
+    c.cairo_fill(cr);
+
+    const card = dialogRect(width, height);
+    drawRoundedRect(cr, card, 14);
+    c.cairo_set_source_rgba(cr, 0.09, 0.10, 0.12, 0.98);
+    c.cairo_fill_preserve(cr);
+    c.cairo_set_source_rgba(cr, 0.38, 0.91, 1.0, 0.28);
+    c.cairo_set_line_width(cr, 1);
+    c.cairo_stroke(cr);
+
+    const title = switch (kind) {
+        .new_folder => "Nova pasta",
+        .rename => "Renomear item",
+        .delete_confirm => "Mover para a lixeira",
+        .delete_permanent_confirm => "Excluir permanentemente",
+        .none => "",
+    };
+    const subtitle = switch (kind) {
+        .new_folder => "Escolha um nome para a nova pasta.",
+        .rename => "Digite o novo nome do item selecionado.",
+        .delete_confirm => "O item selecionado será enviado para a lixeira.",
+        .delete_permanent_confirm => "Esta ação apaga o item sem passar pela lixeira.",
+        .none => "",
+    };
+    drawLabel(cr, card.x + 18, card.y + 30, 18, title, 0.96, 0.97, 0.99);
+    drawLabel(cr, card.x + 18, card.y + 54, 13.5, subtitle, 0.72, 0.74, 0.78);
+
+    if (kind == .delete_confirm or kind == .delete_permanent_confirm) {
+        const subject_rect = Rect{ .x = card.x + 18, .y = card.y + 76, .width = card.width - 36, .height = 44 };
+        drawRoundedRect(cr, subject_rect, 10);
+        c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
+        c.cairo_fill(cr);
+        drawLabel(cr, subject_rect.x + 14, subject_rect.y + 28, 15, subject, 0.92, 0.93, 0.96);
+    } else {
+        const input_rect = dialogInputRect(width, height);
+        drawRoundedRect(cr, input_rect, 10);
+        c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
+        c.cairo_fill_preserve(cr);
+        c.cairo_set_source_rgba(cr, 0.38, 0.91, 1.0, 0.20);
+        c.cairo_set_line_width(cr, 1);
+        c.cairo_stroke(cr);
+        drawLabel(cr, input_rect.x + 14, input_rect.y + 27, 15, if (input.len == 0) "Digite aqui..." else input, if (input.len == 0) 0.54 else 0.94, if (input.len == 0) 0.56 else 0.95, if (input.len == 0) 0.60 else 0.97);
+    }
+
+    drawActionButton(cr, dialogCancelRect(width, height), "Cancelar", true, hovered == .dialog_cancel, .secondary);
+    drawActionButton(
+        cr,
+        dialogConfirmRect(width, height),
+        if (kind == .delete_confirm) "Mover" else if (kind == .delete_permanent_confirm) "Excluir" else "Confirmar",
+        if (kind == .delete_confirm or kind == .delete_permanent_confirm) true else input.len > 0,
+        hovered == .dialog_confirm,
+        if (kind == .delete_confirm) .secondary else if (kind == .delete_permanent_confirm) .danger else .primary,
+    );
+}
+
+fn dialogRect(width: u32, height: u32) Rect {
+    const root = rootRect(width, height);
+    return .{
+        .x = root.x + (root.width - 420) / 2.0,
+        .y = root.y + (root.height - 196) / 2.0,
+        .width = 420,
+        .height = 196,
+    };
+}
+
+fn dialogInputRect(width: u32, height: u32) Rect {
+    const card = dialogRect(width, height);
+    return .{
+        .x = card.x + 18,
+        .y = card.y + 76,
+        .width = card.width - 36,
+        .height = 44,
+    };
+}
+
+fn dialogCancelRect(width: u32, height: u32) Rect {
+    const card = dialogRect(width, height);
+    return .{
+        .x = card.x + card.width - 214,
+        .y = card.y + card.height - 50,
+        .width = 92,
+        .height = 32,
+    };
+}
+
+fn dialogConfirmRect(width: u32, height: u32) Rect {
+    const card = dialogRect(width, height);
+    return .{
+        .x = card.x + card.width - 112,
+        .y = card.y + card.height - 50,
+        .width = 94,
+        .height = 32,
+    };
 }
 
 fn drawSidebarItem(
@@ -704,20 +1050,6 @@ fn modifiedHeaderRect(width: u32, height: u32, collapsed: bool) Rect {
     };
 }
 
-fn matchesSidebar(current_dir: []const u8, target: browser.SidebarTarget) bool {
-    const home = std.process.getEnvVarOwned(std.heap.page_allocator, "HOME") catch return false;
-    defer std.heap.page_allocator.free(home);
-
-    return switch (target) {
-        .recents => std.mem.eql(u8, current_dir, home),
-        .home => std.mem.eql(u8, current_dir, home),
-        .trash, .network => false,
-        else => blk: {
-            const item = browser.sidebar_items[@intFromEnum(target)];
-            const subdir = item.subdir orelse break :blk false;
-            const joined = std.fs.path.join(std.heap.page_allocator, &.{ home, subdir }) catch break :blk false;
-            defer std.heap.page_allocator.free(joined);
-            break :blk std.mem.eql(u8, current_dir, joined);
-        },
-    };
+fn matchesSidebar(current_sidebar: ?browser.SidebarTarget, target: browser.SidebarTarget) bool {
+    return current_sidebar != null and current_sidebar.? == target;
 }

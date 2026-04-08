@@ -4,12 +4,42 @@ const buffer_mod = @import("client_buffer");
 const browser = @import("browser.zig");
 const icons = @import("icons.zig");
 const render = @import("render.zig");
+const toast_client = @import("toast_client");
+const toast_model = @import("toast_model");
 
 const log = std.log.scoped(.axia_files);
 
 const width: u32 = 920;
 const height: u32 = 580;
 const double_click_threshold_ms: i64 = 380;
+
+const DialogKind = enum {
+    none,
+    new_folder,
+    rename,
+    delete_confirm,
+    delete_permanent_confirm,
+};
+
+const DialogState = struct {
+    kind: DialogKind = .none,
+    input: [160]u8 = [_]u8{0} ** 160,
+    input_len: usize = 0,
+    subject: [160]u8 = [_]u8{0} ** 160,
+    subject_len: usize = 0,
+
+    fn clear(self: *DialogState) void {
+        self.* = .{};
+    }
+
+    fn inputText(self: *const DialogState) []const u8 {
+        return self.input[0..self.input_len];
+    }
+
+    fn subjectText(self: *const DialogState) []const u8 {
+        return self.subject[0..self.subject_len];
+    }
+};
 
 pub const Mode = enum {
     browser,
@@ -25,10 +55,12 @@ pub const App = struct {
     wm_base: ?*c.struct_xdg_wm_base = null,
     seat: ?*c.struct_wl_seat = null,
     pointer: ?*c.struct_wl_pointer = null,
+    keyboard: ?*c.struct_wl_keyboard = null,
     wl_surface: ?*c.struct_wl_surface = null,
     xdg_surface: ?*c.struct_xdg_surface = null,
     toplevel: ?*c.struct_xdg_toplevel = null,
     buffer: ?buffer_mod.ShmBuffer = null,
+    ipc_socket_path: ?[]u8 = null,
     running: bool = true,
     configured: bool = false,
     dirty: bool = false,
@@ -37,6 +69,7 @@ pub const App = struct {
     pointer_x: f64 = 0,
     pointer_y: f64 = 0,
     hovered: render.Hit = .none,
+    dialog: DialogState = .{},
     last_button_serial: u32 = 0,
     last_clicked_path: ?[]u8 = null,
     last_click_ms: i64 = 0,
@@ -45,12 +78,16 @@ pub const App = struct {
     mode: Mode = .browser,
     browser: browser.Browser,
     icons: icons.SidebarIcons,
+    xkb_context: ?*c.struct_xkb_context = null,
+    xkb_keymap: ?*c.struct_xkb_keymap = null,
+    xkb_state: ?*c.struct_xkb_state = null,
     registry_listener: c.struct_wl_registry_listener = undefined,
     wm_base_listener: c.struct_xdg_wm_base_listener = undefined,
     xdg_surface_listener: c.struct_xdg_surface_listener = undefined,
     toplevel_listener: c.struct_xdg_toplevel_listener = undefined,
     seat_listener: c.struct_wl_seat_listener = undefined,
     pointer_listener: c.struct_wl_pointer_listener = undefined,
+    keyboard_listener: c.struct_wl_keyboard_listener = undefined,
 
     pub fn create(allocator: std.mem.Allocator, mode: Mode) !*App {
         const app = try allocator.create(App);
@@ -71,6 +108,7 @@ pub const App = struct {
             }),
             .icons = try icons.SidebarIcons.init(allocator),
         };
+        app.ipc_socket_path = std.process.getEnvVarOwned(allocator, "AXIA_IPC_SOCKET") catch null;
 
         app.registry_listener = .{ .global = handleGlobal, .global_remove = handleGlobalRemove };
         _ = c.wl_registry_add_listener(registry, &app.registry_listener, app);
@@ -93,6 +131,8 @@ pub const App = struct {
 
     fn deinit(self: *App) void {
         if (self.buffer) |*buffer| buffer.deinit();
+        self.clearXkb();
+        if (self.keyboard) |keyboard| c.wl_keyboard_destroy(keyboard);
         if (self.pointer) |pointer| c.wl_pointer_destroy(pointer);
         if (self.seat) |seat| c.wl_seat_destroy(seat);
         if (self.toplevel) |toplevel| c.xdg_toplevel_destroy(toplevel);
@@ -102,6 +142,7 @@ pub const App = struct {
         if (self.shm) |shm| c.wl_shm_destroy(shm);
         if (self.compositor) |compositor| c.wl_compositor_destroy(compositor);
         if (self.last_clicked_path) |path| self.allocator.free(path);
+        if (self.ipc_socket_path) |socket| self.allocator.free(socket);
         self.icons.deinit();
         self.browser.deinit();
         c.wl_registry_destroy(self.registry);
@@ -167,6 +208,9 @@ pub const App = struct {
             self.sidebar_collapsed,
             &self.icons,
             self.mode == .wallpaper_picker,
+            dialogKindForRender(self.dialog.kind),
+            self.dialog.inputText(),
+            self.dialog.subjectText(),
         );
         c.cairo_surface_flush(buffer.surface);
         c.wl_surface_attach(self.wl_surface.?, buffer.buffer, 0, 0);
@@ -184,6 +228,7 @@ pub const App = struct {
             self.browser.snapshot(),
             self.sidebar_collapsed,
             self.mode == .wallpaper_picker,
+            dialogKindForRender(self.dialog.kind),
         );
         if (!hitEquals(new_hovered, self.hovered)) {
             self.hovered = new_hovered;
@@ -223,7 +268,13 @@ pub const App = struct {
             .close => self.running = false,
             .toggle_sidebar => self.sidebar_collapsed = !self.sidebar_collapsed,
             .up => self.browser.goParent() catch {},
+            .breadcrumb_up => self.browser.goParent() catch {},
             .open_selected => self.openSelectedPath(),
+            .new_folder => self.beginCreateFolderDialog(),
+            .rename_selected => self.beginRenameDialog(),
+            .delete_selected => self.beginDeleteDialog(),
+            .dialog_confirm => self.confirmDialog(),
+            .dialog_cancel => self.dialog.clear(),
             .previous => self.browser.previousPage(),
             .next => self.browser.nextPage(),
             .sort_modified => self.browser.toggleModifiedSort(),
@@ -266,6 +317,10 @@ pub const App = struct {
 
     fn openSelectedPath(self: *App) void {
         const path = self.browser.selectedPath() orelse return;
+        if (self.browser.hasSelectedDirectory()) {
+            self.browser.activateSelected() catch {};
+            return;
+        }
         self.openPathDefault(path);
     }
 
@@ -309,6 +364,127 @@ pub const App = struct {
         self.seat = seat;
         self.seat_listener = .{ .capabilities = handleSeatCapabilities, .name = handleSeatName };
         _ = c.wl_seat_add_listener(seat, &self.seat_listener, self);
+    }
+
+    fn beginCreateFolderDialog(self: *App) void {
+        if (self.mode == .wallpaper_picker) return;
+        self.dialog.clear();
+        self.dialog.kind = .new_folder;
+        self.setDialogInput("Nova pasta");
+        self.dirty = true;
+    }
+
+    fn beginRenameDialog(self: *App) void {
+        if (self.mode == .wallpaper_picker) return;
+        const name = self.browser.selectedName() orelse return;
+        self.dialog.clear();
+        self.dialog.kind = .rename;
+        self.setDialogInput(name);
+        self.setDialogSubject(name);
+        self.dirty = true;
+    }
+
+    fn beginDeleteDialog(self: *App) void {
+        if (self.mode == .wallpaper_picker) return;
+        const name = self.browser.selectedName() orelse return;
+        self.dialog.clear();
+        self.dialog.kind = if (self.browser.isViewingTrash()) .delete_permanent_confirm else .delete_confirm;
+        self.setDialogSubject(name);
+        self.dirty = true;
+    }
+
+    fn beginPermanentDeleteDialog(self: *App) void {
+        if (self.mode == .wallpaper_picker) return;
+        const name = self.browser.selectedName() orelse return;
+        self.dialog.clear();
+        self.dialog.kind = .delete_permanent_confirm;
+        self.setDialogSubject(name);
+        self.dirty = true;
+    }
+
+    fn confirmDialog(self: *App) void {
+        switch (self.dialog.kind) {
+            .none => return,
+            .new_folder => {
+                self.browser.createDirectoryNamed(self.dialog.inputText()) catch |err| {
+                    log.err("failed to create directory: {}", .{err});
+                    self.showToast(.failure, "Nao foi possivel criar a pasta.");
+                    return;
+                };
+                self.showToast(.success, "Pasta criada.");
+            },
+            .rename => {
+                self.browser.renameSelectedTo(self.dialog.inputText()) catch |err| {
+                    log.err("failed to rename entry: {}", .{err});
+                    self.showToast(.failure, "Nao foi possivel renomear o item.");
+                    return;
+                };
+                self.showToast(.success, "Item renomeado.");
+            },
+            .delete_confirm => {
+                self.browser.deleteSelected() catch |err| {
+                    log.err("failed to delete entry: {}", .{err});
+                    self.showToast(.failure, "Nao foi possivel mover para a lixeira.");
+                    return;
+                };
+                self.showToast(.info, "Item movido para a lixeira.");
+            },
+            .delete_permanent_confirm => {
+                self.browser.deleteSelectedPermanently() catch |err| {
+                    log.err("failed to delete entry permanently: {}", .{err});
+                    self.showToast(.failure, "Nao foi possivel excluir permanentemente.");
+                    return;
+                };
+                self.showToast(.warning, "Item excluido permanentemente.");
+            },
+        }
+        self.dialog.clear();
+        self.hovered = .none;
+        self.dirty = true;
+    }
+
+    fn setDialogInput(self: *App, text: []const u8) void {
+        const len = @min(self.dialog.input.len, text.len);
+        @memcpy(self.dialog.input[0..len], text[0..len]);
+        self.dialog.input_len = len;
+    }
+
+    fn setDialogSubject(self: *App, text: []const u8) void {
+        const len = @min(self.dialog.subject.len, text.len);
+        @memcpy(self.dialog.subject[0..len], text[0..len]);
+        self.dialog.subject_len = len;
+    }
+
+    fn appendDialogText(self: *App, text: []const u8) void {
+        if (self.dialog.kind == .none or self.dialog.kind == .delete_confirm or self.dialog.kind == .delete_permanent_confirm) return;
+        const available = self.dialog.input.len - self.dialog.input_len;
+        const len = @min(available, text.len);
+        if (len == 0) return;
+        @memcpy(self.dialog.input[self.dialog.input_len .. self.dialog.input_len + len], text[0..len]);
+        self.dialog.input_len += len;
+        self.dirty = true;
+    }
+
+    fn backspaceDialogText(self: *App) void {
+        if (self.dialog.kind == .none or self.dialog.kind == .delete_confirm or self.dialog.kind == .delete_permanent_confirm or self.dialog.input_len == 0) return;
+        var index = self.dialog.input_len - 1;
+        while (index > 0 and (self.dialog.input[index] & 0b1100_0000) == 0b1000_0000) : (index -= 1) {}
+        self.dialog.input_len = index;
+        self.dirty = true;
+    }
+
+    fn clearXkb(self: *App) void {
+        if (self.xkb_state) |state| c.xkb_state_unref(state);
+        if (self.xkb_keymap) |keymap| c.xkb_keymap_unref(keymap);
+        if (self.xkb_context) |context| c.xkb_context_unref(context);
+        self.xkb_state = null;
+        self.xkb_keymap = null;
+        self.xkb_context = null;
+    }
+
+    fn showToast(self: *App, level: toast_model.Level, message: []const u8) void {
+        const socket_path = self.ipc_socket_path orelse return;
+        toast_client.show(self.allocator, socket_path, level, message) catch {};
     }
 
     fn handleGlobal(data: ?*anyopaque, _: ?*c.struct_wl_registry, name: u32, interface: [*c]const u8, version: u32) callconv(.c) void {
@@ -379,6 +555,20 @@ pub const App = struct {
             };
             _ = c.wl_pointer_add_listener(pointer, &app.pointer_listener, app);
         }
+        if ((capabilities & c.WL_SEAT_CAPABILITY_KEYBOARD) != 0 and app.keyboard == null) {
+            const wl_seat = app.seat orelse return;
+            const keyboard = c.wl_seat_get_keyboard(wl_seat) orelse return;
+            app.keyboard = keyboard;
+            app.keyboard_listener = .{
+                .keymap = handleKeyboardKeymap,
+                .enter = handleKeyboardEnter,
+                .leave = handleKeyboardLeave,
+                .key = handleKeyboardKey,
+                .modifiers = handleKeyboardModifiers,
+                .repeat_info = handleKeyboardRepeatInfo,
+            };
+            _ = c.wl_keyboard_add_listener(keyboard, &app.keyboard_listener, app);
+        }
     }
     fn handleSeatName(_: ?*anyopaque, _: ?*c.struct_wl_seat, _: [*c]const u8) callconv(.c) void {}
     fn handlePointerEnter(data: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: ?*c.struct_wl_surface, sx: c.wl_fixed_t, sy: c.wl_fixed_t) callconv(.c) void {
@@ -427,6 +617,94 @@ pub const App = struct {
     fn handlePointerAxisDiscrete(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: i32) callconv(.c) void {}
     fn handlePointerAxisValue120(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: i32) callconv(.c) void {}
     fn handlePointerAxisRelativeDirection(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: u32) callconv(.c) void {}
+
+    fn handleKeyboardKeymap(data: ?*anyopaque, _: ?*c.struct_wl_keyboard, format: u32, fd: i32, size: u32) callconv(.c) void {
+        const raw_app = data orelse return;
+        const app: *App = @ptrCast(@alignCast(raw_app));
+        defer _ = c.close(fd);
+
+        if (format != c.WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) return;
+
+        const keymap_memory = c.mmap(null, size, c.PROT_READ, c.MAP_PRIVATE, fd, 0);
+        if (keymap_memory == c.MAP_FAILED) return;
+        defer _ = c.munmap(keymap_memory, size);
+
+        if (app.xkb_context == null) {
+            app.xkb_context = c.xkb_context_new(c.XKB_CONTEXT_NO_FLAGS);
+        }
+
+        const context = app.xkb_context orelse return;
+        if (app.xkb_state) |state| c.xkb_state_unref(state);
+        if (app.xkb_keymap) |keymap| c.xkb_keymap_unref(keymap);
+
+        const keymap_string: [*c]const u8 = @ptrCast(keymap_memory);
+        app.xkb_keymap = c.xkb_keymap_new_from_string(
+            context,
+            keymap_string,
+            c.XKB_KEYMAP_FORMAT_TEXT_V1,
+            c.XKB_KEYMAP_COMPILE_NO_FLAGS,
+        );
+        if (app.xkb_keymap == null) return;
+        app.xkb_state = c.xkb_state_new(app.xkb_keymap);
+    }
+
+    fn handleKeyboardEnter(_: ?*anyopaque, _: ?*c.struct_wl_keyboard, _: u32, _: ?*c.struct_wl_surface, _: ?*c.struct_wl_array) callconv(.c) void {}
+    fn handleKeyboardLeave(_: ?*anyopaque, _: ?*c.struct_wl_keyboard, _: u32, _: ?*c.struct_wl_surface) callconv(.c) void {}
+
+    fn handleKeyboardKey(data: ?*anyopaque, _: ?*c.struct_wl_keyboard, _: u32, _: u32, key: u32, state: u32) callconv(.c) void {
+        if (state != c.WL_KEYBOARD_KEY_STATE_PRESSED) return;
+        const raw_app = data orelse return;
+        const app: *App = @ptrCast(@alignCast(raw_app));
+        const xkb_state = app.xkb_state orelse return;
+
+        const keycode: c.xkb_keycode_t = key + 8;
+        const keysym = c.xkb_state_key_get_one_sym(xkb_state, keycode);
+
+        if (app.dialog.kind != .none) {
+            switch (keysym) {
+                c.XKB_KEY_Escape => {
+                    app.dialog.clear();
+                    app.dirty = true;
+                    return;
+                },
+                c.XKB_KEY_Return, c.XKB_KEY_KP_Enter => {
+                    app.confirmDialog();
+                    return;
+                },
+                c.XKB_KEY_BackSpace => {
+                    app.backspaceDialogText();
+                    return;
+                },
+                else => {
+                    var utf8_buf = [_]u8{0} ** 64;
+                    const written = c.xkb_state_key_get_utf8(xkb_state, keycode, @ptrCast(&utf8_buf[0]), utf8_buf.len);
+                    if (written > 0) {
+                        const text = std.mem.sliceTo(utf8_buf[0..], 0);
+                        app.appendDialogText(text);
+                    }
+                    return;
+                },
+            }
+        }
+
+        switch (keysym) {
+            c.XKB_KEY_Escape => app.running = false,
+            c.XKB_KEY_Return, c.XKB_KEY_KP_Enter => app.openSelectedPath(),
+            c.XKB_KEY_F2 => app.beginRenameDialog(),
+            c.XKB_KEY_Delete => if (isShiftPressed(app)) app.beginPermanentDeleteDialog() else app.beginDeleteDialog(),
+            else => return,
+        }
+        app.dirty = true;
+    }
+
+    fn handleKeyboardModifiers(data: ?*anyopaque, _: ?*c.struct_wl_keyboard, _: u32, mods_depressed: u32, mods_latched: u32, mods_locked: u32, group: u32) callconv(.c) void {
+        const raw_app = data orelse return;
+        const app: *App = @ptrCast(@alignCast(raw_app));
+        const state = app.xkb_state orelse return;
+        _ = c.xkb_state_update_mask(state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
+    }
+
+    fn handleKeyboardRepeatInfo(_: ?*anyopaque, _: ?*c.struct_wl_keyboard, _: i32, _: i32) callconv(.c) void {}
 };
 
 fn hasState(states: [*c]c.struct_wl_array, target: u32) bool {
@@ -448,10 +726,16 @@ fn hitEquals(lhs: render.Hit, rhs: render.Hit) bool {
         .close => rhs == .close,
         .toggle_sidebar => rhs == .toggle_sidebar,
         .up => rhs == .up,
+        .breadcrumb_up => rhs == .breadcrumb_up,
         .open_selected => rhs == .open_selected,
+        .new_folder => rhs == .new_folder,
+        .rename_selected => rhs == .rename_selected,
+        .delete_selected => rhs == .delete_selected,
         .previous => rhs == .previous,
         .next => rhs == .next,
         .sort_modified => rhs == .sort_modified,
+        .dialog_confirm => rhs == .dialog_confirm,
+        .dialog_cancel => rhs == .dialog_cancel,
         .sidebar => |left_target| switch (rhs) {
             .sidebar => |right_target| left_target == right_target,
             else => false,
@@ -461,4 +745,22 @@ fn hitEquals(lhs: render.Hit, rhs: render.Hit) bool {
             else => false,
         },
     };
+}
+
+fn dialogKindForRender(kind: DialogKind) render.DialogKind {
+    return switch (kind) {
+        .none => .none,
+        .new_folder => .new_folder,
+        .rename => .rename,
+        .delete_confirm => .delete_confirm,
+        .delete_permanent_confirm => .delete_permanent_confirm,
+    };
+}
+
+fn isShiftPressed(app: *const App) bool {
+    const state = app.xkb_state orelse return false;
+    const keymap = app.xkb_keymap orelse return false;
+    const shift_index = c.xkb_keymap_mod_get_index(keymap, c.XKB_MOD_NAME_SHIFT);
+    if (shift_index == c.XKB_MOD_INVALID) return false;
+    return c.xkb_state_mod_index_is_active(state, shift_index, c.XKB_STATE_MODS_EFFECTIVE) == 1;
 }

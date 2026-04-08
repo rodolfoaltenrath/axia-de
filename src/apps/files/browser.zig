@@ -4,7 +4,7 @@ const c = @cImport({
     @cInclude("time.h");
 });
 
-pub const sidebar_count: usize = 9;
+pub const sidebar_count: usize = 8;
 pub const visible_entry_count: usize = 12;
 
 pub const EntryKind = enum {
@@ -46,6 +46,8 @@ pub const EntryView = struct {
 pub const Snapshot = struct {
     current_dir: []const u8 = "",
     selected_path: []const u8 = "",
+    selected_exists: bool = false,
+    current_sidebar: ?SidebarTarget = null,
     selected_visible: bool = false,
     selected_visible_index: usize = 0,
     selected_is_file: bool = false,
@@ -64,7 +66,6 @@ pub const SortField = enum {
 };
 
 pub const SidebarTarget = enum {
-    recents,
     home,
     documents,
     downloads,
@@ -86,7 +87,6 @@ pub const sidebar_items = [_]struct {
     icon: []const u8,
     subdir: ?[]const u8,
 }{
-    .{ .target = .recents, .label = "Recentes", .icon = "R", .subdir = null },
     .{ .target = .home, .label = "Pasta pessoal", .icon = "H", .subdir = null },
     .{ .target = .documents, .label = "Documentos", .icon = "D", .subdir = "Documentos" },
     .{ .target = .downloads, .label = "Downloads", .icon = "V", .subdir = "Downloads" },
@@ -106,6 +106,7 @@ pub const Browser = struct {
     page_start: usize = 0,
     sort_field: SortField = .modified,
     modified_descending: bool = true,
+    current_sidebar: ?SidebarTarget = null,
 
     pub fn init(allocator: std.mem.Allocator, mode: Mode) Browser {
         return .{
@@ -133,23 +134,29 @@ pub const Browser = struct {
     }
 
     pub fn openSidebar(self: *Browser, target: SidebarTarget) !void {
-        const home = try std.process.getEnvVarOwned(self.allocator, "HOME");
-        defer self.allocator.free(home);
+        const fallback_home = try std.process.getEnvVarOwned(self.allocator, "HOME");
+        defer self.allocator.free(fallback_home);
 
         const path = switch (target) {
-            .recents, .trash, .network => try self.allocator.dupe(u8, home),
-            .home => try self.allocator.dupe(u8, home),
+            .trash => try self.trashFilesDir(),
+            .network => blk: {
+                break :blk try self.allocator.dupe(u8, fallback_home);
+            },
+            .home => blk: {
+                break :blk try self.allocator.dupe(u8, fallback_home);
+            },
             else => blk: {
                 const item = sidebar_items[@intFromEnum(target)];
-                break :blk try std.fs.path.join(self.allocator, &.{ home, item.subdir.? });
+                break :blk try std.fs.path.join(self.allocator, &.{ fallback_home, item.subdir.? });
             },
         };
         defer self.allocator.free(path);
 
         self.openDirectory(path) catch |err| switch (err) {
-            error.FileNotFound => try self.openDirectory(home),
+            error.FileNotFound => try self.openDirectory(fallback_home),
             else => return err,
         };
+        self.current_sidebar = target;
     }
 
     pub fn openDirectory(self: *Browser, path: []const u8) !void {
@@ -194,6 +201,7 @@ pub const Browser = struct {
 
         if (self.current_dir) |existing| self.allocator.free(existing);
         self.current_dir = try self.allocator.dupe(u8, normalized);
+        self.current_sidebar = inferSidebarTarget(self.allocator, normalized);
         self.page_start = 0;
         if (self.selected_path) |selected| {
             self.allocator.free(selected);
@@ -255,16 +263,106 @@ pub const Browser = struct {
         return self.selected_path;
     }
 
+    pub fn hasSelection(self: *const Browser) bool {
+        return self.selectedEntry() != null;
+    }
+
     pub fn hasSelectedFile(self: *const Browser) bool {
-        if (self.selected_path == null) return false;
-        for (self.entries.items) |entry| {
-            if (std.mem.eql(u8, entry.path, self.selected_path.?) and entry.kind == .file) return true;
-        }
-        return false;
+        const entry = self.selectedEntry() orelse return false;
+        return entry.kind == .file;
+    }
+
+    pub fn hasSelectedDirectory(self: *const Browser) bool {
+        const entry = self.selectedEntry() orelse return false;
+        return entry.kind == .directory;
     }
 
     pub fn isSelectedPath(self: *const Browser, path: []const u8) bool {
         return self.selected_path != null and std.mem.eql(u8, self.selected_path.?, path);
+    }
+
+    pub fn selectedName(self: *const Browser) ?[]const u8 {
+        const entry = self.selectedEntry() orelse return null;
+        return entry.name;
+    }
+
+    pub fn activateSelected(self: *Browser) !void {
+        const entry = self.selectedEntry() orelse return;
+        switch (entry.kind) {
+            .directory => try self.openDirectory(entry.path),
+            .file => {},
+        }
+    }
+
+    pub fn createDirectoryNamed(self: *Browser, name: []const u8) !void {
+        const current_dir = self.current_dir orelse return error.NoCurrentDirectory;
+        const trimmed = std.mem.trim(u8, name, " \t\r\n");
+        if (trimmed.len == 0) return error.InvalidName;
+        if (std.mem.indexOfScalar(u8, trimmed, '/') != null) return error.InvalidName;
+
+        const target_path = try std.fs.path.join(self.allocator, &.{ current_dir, trimmed });
+        defer self.allocator.free(target_path);
+        try std.fs.makeDirAbsolute(target_path);
+        try self.openDirectory(current_dir);
+        try self.selectPath(target_path);
+    }
+
+    pub fn renameSelectedTo(self: *Browser, name: []const u8) !void {
+        const current_dir = self.current_dir orelse return error.NoCurrentDirectory;
+        const selected = self.selectedEntry() orelse return error.NoSelection;
+        const trimmed = std.mem.trim(u8, name, " \t\r\n");
+        if (trimmed.len == 0) return error.InvalidName;
+        if (std.mem.indexOfScalar(u8, trimmed, '/') != null) return error.InvalidName;
+        if (std.mem.eql(u8, trimmed, selected.name)) return;
+
+        const target_path = try std.fs.path.join(self.allocator, &.{ current_dir, trimmed });
+        defer self.allocator.free(target_path);
+        try std.fs.renameAbsolute(selected.path, target_path);
+        try self.openDirectory(current_dir);
+        try self.selectPath(target_path);
+    }
+
+    pub fn deleteSelected(self: *Browser) !void {
+        if (self.isViewingTrash()) {
+            return try self.deleteSelectedPermanently();
+        }
+
+        const current_dir = self.current_dir orelse return error.NoCurrentDirectory;
+        const selected = self.selectedEntry() orelse return error.NoSelection;
+        const trash_files = try self.trashFilesDir();
+        defer self.allocator.free(trash_files);
+        const trash_info = try self.trashInfoDir();
+        defer self.allocator.free(trash_info);
+
+        try ensureDirectoryPath(trash_files);
+        try ensureDirectoryPath(trash_info);
+
+        const trashed_name = try uniqueTrashName(self.allocator, trash_files, selected.name);
+        defer self.allocator.free(trashed_name);
+
+        const destination_path = try std.fs.path.join(self.allocator, &.{ trash_files, trashed_name });
+        defer self.allocator.free(destination_path);
+
+        try std.fs.renameAbsolute(selected.path, destination_path);
+        try self.writeTrashInfo(trashed_name, selected.path);
+        try self.openDirectory(current_dir);
+    }
+
+    pub fn deleteSelectedPermanently(self: *Browser) !void {
+        const current_dir = self.current_dir orelse return error.NoCurrentDirectory;
+        const selected = self.selectedEntry() orelse return error.NoSelection;
+        switch (selected.kind) {
+            .directory => try std.fs.deleteTreeAbsolute(selected.path),
+            .file => try std.fs.deleteFileAbsolute(selected.path),
+        }
+        if (self.isViewingTrash()) {
+            try self.removeTrashInfoFor(selected.name);
+        }
+        try self.openDirectory(current_dir);
+    }
+
+    pub fn isViewingTrash(self: *const Browser) bool {
+        return self.current_sidebar == .trash;
     }
 
     pub fn selectVisible(self: *Browser, visible_index: usize) !void {
@@ -288,6 +386,8 @@ pub const Browser = struct {
         var state = Snapshot{};
         state.current_dir = self.current_dir orelse "";
         state.selected_path = self.selected_path orelse "";
+        state.selected_exists = self.selectedEntry() != null;
+        state.current_sidebar = self.current_sidebar;
         state.total_count = self.entries.items.len;
         state.page_start = self.page_start;
         state.has_previous = self.page_start > 0;
@@ -339,7 +439,144 @@ pub const Browser = struct {
         if (self.entries.items.len <= visible_entry_count) return 0;
         return self.entries.items.len - visible_entry_count;
     }
+
+    fn selectedEntry(self: *const Browser) ?Entry {
+        const selected = self.selected_path orelse return null;
+        for (self.entries.items) |entry| {
+            if (std.mem.eql(u8, entry.path, selected)) return entry;
+        }
+        return null;
+    }
+
+    fn selectPath(self: *Browser, path: []const u8) !void {
+        for (self.entries.items, 0..) |entry, index| {
+            if (!std.mem.eql(u8, entry.path, path)) continue;
+            if (self.selected_path) |selected| self.allocator.free(selected);
+            self.selected_path = try self.allocator.dupe(u8, entry.path);
+            if (index < self.page_start or index >= self.page_start + visible_entry_count) {
+                self.page_start = (index / visible_entry_count) * visible_entry_count;
+            }
+            return;
+        }
+    }
+
+    fn trashBaseDir(self: *const Browser) ![]u8 {
+        const home = try std.process.getEnvVarOwned(self.allocator, "HOME");
+        defer self.allocator.free(home);
+        return try std.fs.path.join(self.allocator, &.{ home, ".local", "share", "Trash" });
+    }
+
+    fn trashFilesDir(self: *const Browser) ![]u8 {
+        const base = try self.trashBaseDir();
+        defer self.allocator.free(base);
+        return try std.fs.path.join(self.allocator, &.{ base, "files" });
+    }
+
+    fn trashInfoDir(self: *const Browser) ![]u8 {
+        const base = try self.trashBaseDir();
+        defer self.allocator.free(base);
+        return try std.fs.path.join(self.allocator, &.{ base, "info" });
+    }
+
+    fn writeTrashInfo(self: *Browser, trashed_name: []const u8, original_path: []const u8) !void {
+        const info_dir = try self.trashInfoDir();
+        defer self.allocator.free(info_dir);
+        try ensureDirectoryPath(info_dir);
+
+        const info_name = try std.fmt.allocPrint(self.allocator, "{s}.trashinfo", .{trashed_name});
+        defer self.allocator.free(info_name);
+        const info_path = try std.fs.path.join(self.allocator, &.{ info_dir, info_name });
+        defer self.allocator.free(info_path);
+
+        var file = try std.fs.createFileAbsolute(info_path, .{ .truncate = true, .read = false });
+        defer file.close();
+
+        var date_buf: [32]u8 = undefined;
+        const date = formatTrashDeletionDate(&date_buf);
+        const contents = try std.fmt.allocPrint(
+            self.allocator,
+            "[Trash Info]\nPath={s}\nDeletionDate={s}\n",
+            .{ original_path, date },
+        );
+        defer self.allocator.free(contents);
+        try file.writeAll(contents);
+    }
+
+    fn removeTrashInfoFor(self: *Browser, trashed_name: []const u8) !void {
+        const info_dir = try self.trashInfoDir();
+        defer self.allocator.free(info_dir);
+        const info_name = try std.fmt.allocPrint(self.allocator, "{s}.trashinfo", .{trashed_name});
+        defer self.allocator.free(info_name);
+        const info_path = try std.fs.path.join(self.allocator, &.{ info_dir, info_name });
+        defer self.allocator.free(info_path);
+        std.fs.deleteFileAbsolute(info_path) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
+    }
 };
+
+fn inferSidebarTarget(allocator: std.mem.Allocator, normalized: []const u8) ?SidebarTarget {
+    const home = std.process.getEnvVarOwned(allocator, "HOME") catch return null;
+    defer allocator.free(home);
+    const trash = std.fs.path.join(allocator, &.{ home, ".local", "share", "Trash", "files" }) catch return null;
+    defer allocator.free(trash);
+
+    if (std.mem.eql(u8, normalized, home)) return .home;
+    if (std.mem.eql(u8, normalized, trash)) return .trash;
+
+    for (sidebar_items) |item| {
+        if (item.subdir == null) continue;
+        const candidate = std.fs.path.join(allocator, &.{ home, item.subdir.? }) catch {
+            continue;
+        };
+        defer allocator.free(candidate);
+        if (std.mem.eql(u8, normalized, candidate)) return item.target;
+    }
+
+    return null;
+}
+
+fn ensureDirectoryPath(path: []const u8) !void {
+    try std.fs.cwd().makePath(path);
+}
+
+fn uniqueTrashName(allocator: std.mem.Allocator, trash_dir: []const u8, original_name: []const u8) ![]u8 {
+    var candidate = try allocator.dupe(u8, original_name);
+    errdefer allocator.free(candidate);
+
+    var index: usize = 1;
+    while (pathExists(trash_dir, candidate)) {
+        allocator.free(candidate);
+        candidate = try appendDuplicateSuffix(allocator, original_name, index);
+        index += 1;
+    }
+    return candidate;
+}
+
+fn pathExists(base_dir: []const u8, name: []const u8) bool {
+    const full_path = std.fs.path.join(std.heap.page_allocator, &.{ base_dir, name }) catch return false;
+    defer std.heap.page_allocator.free(full_path);
+    std.fs.accessAbsolute(full_path, .{}) catch return false;
+    return true;
+}
+
+fn appendDuplicateSuffix(allocator: std.mem.Allocator, original_name: []const u8, index: usize) ![]u8 {
+    const extension = std.fs.path.extension(original_name);
+    if (extension.len == 0 or extension.len == original_name.len) {
+        return try std.fmt.allocPrint(allocator, "{s} ({d})", .{ original_name, index });
+    }
+    const stem = original_name[0 .. original_name.len - extension.len];
+    return try std.fmt.allocPrint(allocator, "{s} ({d}){s}", .{ stem, index, extension });
+}
+
+fn formatTrashDeletionDate(buffer: []u8) []const u8 {
+    var now: c.time_t = @intCast(std.time.timestamp());
+    var local_time: c.struct_tm = undefined;
+    if (c.localtime_r(&now, &local_time) == null) return "1970-01-01T00:00:00";
+    const len = c.strftime(buffer.ptr, buffer.len, "%Y-%m-%dT%H:%M:%S", &local_time);
+    return buffer[0..len];
+}
 
 fn normalizeAbsolute(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     if (std.fs.path.isAbsolute(path)) return try allocator.dupe(u8, path);
