@@ -5,6 +5,7 @@ const battery = @import("battery.zig");
 const bluetooth = @import("bluetooth.zig");
 const calendar = @import("calendar.zig");
 const network = @import("network.zig");
+const notification_model = @import("notification_model");
 const settings_model = @import("settings_model");
 
 pub const Rect = struct {
@@ -22,6 +23,7 @@ pub const PanelMetrics = struct {
     workspaces: Rect,
     apps: Rect,
     clock: Rect,
+    notifications: Rect,
     power: Rect,
     battery: Rect,
     network: Rect,
@@ -39,6 +41,7 @@ pub const HoverTarget = enum {
     workspaces,
     apps,
     clock,
+    notifications,
     power,
     battery,
     network,
@@ -54,11 +57,13 @@ pub fn computePanelMetrics(width: u32, height: u32, show_battery: bool, show_net
     const bluetooth_x = if (show_bluetooth) audio_x - 42 else audio_x;
     const network_x = if (show_network) bluetooth_x - 42.0 else bluetooth_x;
     const battery_x = if (show_battery) network_x - 46.0 else network_x;
+    const notifications_x = battery_x - 42.0;
 
     return .{
         .workspaces = .{ .x = 18, .y = 4, .width = 160, .height = h - 8 },
         .apps = .{ .x = 184, .y = 4, .width = 120, .height = h - 8 },
         .clock = .{ .x = center_x - 124, .y = 4, .width = 248, .height = h - 8 },
+        .notifications = .{ .x = notifications_x, .y = 4, .width = 36, .height = h - 8 },
         .power = .{ .x = power_x, .y = 4, .width = 36, .height = h - 8 },
         .battery = .{ .x = if (show_battery) battery_x else network_x, .y = 4, .width = if (show_battery) 40 else 0, .height = h - 8 },
         .network = .{ .x = if (show_network) network_x else bluetooth_x, .y = 4, .width = if (show_network) 36 else 0, .height = h - 8 },
@@ -78,6 +83,7 @@ pub fn panelHoverAt(width: u32, height: u32, show_battery: bool, show_network: b
     const metrics = computePanelMetrics(width, height, show_battery, show_network, show_bluetooth);
     if (metrics.power.contains(x, y)) return .power;
     if (metrics.audio.contains(x, y)) return .audio;
+    if (metrics.notifications.contains(x, y)) return .notifications;
     if (show_battery and metrics.battery.contains(x, y)) return .battery;
     if (show_network and metrics.network.contains(x, y)) return .network;
     if (show_bluetooth and metrics.bluetooth.contains(x, y)) return .bluetooth;
@@ -97,6 +103,7 @@ pub fn drawPanel(
     battery_state: battery.State,
     network_state: network.State,
     bluetooth_state: bluetooth.State,
+    notification_state: notification_model.State,
     preferences: settings_model.PreferencesState,
 ) void {
     const metrics = computePanelMetrics(width, height, battery_state.available, network_state.available, bluetooth_state.available);
@@ -121,6 +128,7 @@ pub fn drawPanel(
 
     drawClockHover(cr, metrics.clock, hovered == .clock, preferences);
     drawPowerButton(cr, metrics.power, hovered == .power, preferences);
+    drawNotificationsButton(cr, metrics.notifications, hovered == .notifications, notification_state.count > 0, preferences);
     if (battery_state.available) {
         drawBatteryButton(cr, metrics.battery, hovered == .battery, battery_state, preferences);
     }
@@ -135,6 +143,24 @@ pub fn drawPanel(
     var label_buf: [64]u8 = undefined;
     const label = calendar.formatTimestamp(&label_buf, now, preferences.panel_show_date, preferences.panel_show_seconds);
     drawCenteredLabel(cr, metrics.clock, 16, label, 0.97, 0.98, 0.99);
+}
+
+fn drawNotificationsButton(
+    cr: *c.cairo_t,
+    rect: Rect,
+    hovered: bool,
+    has_items: bool,
+    preferences: settings_model.PreferencesState,
+) void {
+    if (hovered) drawHoverCapsule(cr, rect, preferences);
+    drawNotificationGlyph(cr, rect, 0.94);
+
+    if (has_items) {
+        const accent = settings_model.accentSpec(preferences.accent).primary;
+        c.cairo_arc(cr, rect.x + rect.width - 9, rect.y + 9, 3.2, 0, std.math.pi * 2.0);
+        c.cairo_set_source_rgba(cr, accent[0], accent[1], accent[2], 0.95);
+        c.cairo_fill(cr);
+    }
 }
 
 pub fn drawCalendarPopup(
@@ -321,6 +347,25 @@ fn drawPowerButton(cr: *c.cairo_t, rect: Rect, hovered: bool, preferences: setti
     drawPowerGlyph(cr, rect, 0.94);
 }
 
+fn drawNotificationGlyph(cr: *c.cairo_t, rect: Rect, alpha: f64) void {
+    c.cairo_save(cr);
+    defer c.cairo_restore(cr);
+    const cx = rect.x + rect.width / 2.0;
+    const cy = rect.y + rect.height / 2.0 - 0.2;
+    const bubble = Rect{ .x = cx - 7.8, .y = cy - 6.2, .width = 15.6, .height = 11.6 };
+
+    c.cairo_set_source_rgba(cr, 0.94, 0.95, 0.97, alpha);
+    drawRoundedRect(cr, bubble, 3.8);
+    c.cairo_fill(cr);
+
+    c.cairo_new_path(cr);
+    c.cairo_move_to(cr, cx + 1.6, bubble.y + bubble.height - 0.8);
+    c.cairo_line_to(cr, cx - 0.5, bubble.y + bubble.height + 3.8);
+    c.cairo_line_to(cr, cx - 4.2, bubble.y + bubble.height - 0.8);
+    c.cairo_close_path(cr);
+    c.cairo_fill(cr);
+}
+
 fn drawHoverCapsule(cr: *c.cairo_t, rect: Rect, preferences: settings_model.PreferencesState) void {
     const accent = settings_model.accentSpec(preferences.accent).primary;
     drawRoundedRect(cr, rect, 9);
@@ -351,35 +396,36 @@ fn drawSpeakerGlyph(cr: *c.cairo_t, rect: Rect, muted: bool, alpha: f64) void {
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
 
-    c.cairo_set_line_width(cr, 1.9);
+    c.cairo_set_line_width(cr, 1.8);
     c.cairo_set_line_cap(cr, c.CAIRO_LINE_CAP_ROUND);
     c.cairo_set_line_join(cr, c.CAIRO_LINE_JOIN_ROUND);
     c.cairo_set_source_rgba(cr, 0.94, 0.95, 0.97, alpha);
 
     c.cairo_new_path(cr);
-    c.cairo_move_to(cr, cx - 7, cy - 2.5);
-    c.cairo_line_to(cr, cx - 3.5, cy - 2.5);
-    c.cairo_line_to(cr, cx + 0.5, cy - 6.5);
-    c.cairo_line_to(cr, cx + 0.5, cy + 6.5);
-    c.cairo_line_to(cr, cx - 3.5, cy + 2.5);
-    c.cairo_line_to(cr, cx - 7, cy + 2.5);
+    c.cairo_move_to(cr, cx - 7.6, cy - 2.8);
+    c.cairo_line_to(cr, cx - 4.3, cy - 2.8);
+    c.cairo_line_to(cr, cx - 0.2, cy - 6.6);
+    c.cairo_line_to(cr, cx - 0.2, cy + 6.6);
+    c.cairo_line_to(cr, cx - 4.3, cy + 2.8);
+    c.cairo_line_to(cr, cx - 7.6, cy + 2.8);
     c.cairo_close_path(cr);
     c.cairo_stroke(cr);
 
     if (muted) {
-        c.cairo_move_to(cr, cx + 3.5, cy - 5);
-        c.cairo_line_to(cr, cx + 8.5, cy + 5);
-        c.cairo_move_to(cr, cx + 8.5, cy - 5);
-        c.cairo_line_to(cr, cx + 3.5, cy + 5);
+        c.cairo_new_path(cr);
+        c.cairo_move_to(cr, cx + 3.2, cy - 4.8);
+        c.cairo_line_to(cr, cx + 8.0, cy + 4.8);
+        c.cairo_move_to(cr, cx + 8.0, cy - 4.8);
+        c.cairo_line_to(cr, cx + 3.2, cy + 4.8);
         c.cairo_stroke(cr);
         return;
     }
 
     c.cairo_new_sub_path(cr);
-    c.cairo_arc(cr, cx + 1.5, cy, 3.8, -0.75, 0.75);
+    c.cairo_arc(cr, cx + 1.4, cy, 3.6, -0.78, 0.78);
     c.cairo_stroke(cr);
     c.cairo_new_sub_path(cr);
-    c.cairo_arc(cr, cx + 2.5, cy, 6.2, -0.82, 0.82);
+    c.cairo_arc(cr, cx + 2.2, cy, 5.8, -0.86, 0.86);
     c.cairo_stroke(cr);
 }
 
@@ -389,27 +435,28 @@ fn drawBluetoothGlyph(cr: *c.cairo_t, rect: Rect, powered: bool, alpha: f64) voi
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
 
-    c.cairo_set_line_width(cr, 1.8);
+    c.cairo_set_line_width(cr, 1.7);
     c.cairo_set_line_cap(cr, c.CAIRO_LINE_CAP_ROUND);
     c.cairo_set_line_join(cr, c.CAIRO_LINE_JOIN_ROUND);
     c.cairo_set_source_rgba(cr, 0.94, 0.95, 0.97, if (powered) alpha else 0.62);
 
     c.cairo_new_path(cr);
-    c.cairo_move_to(cr, cx, cy - 8.5);
-    c.cairo_line_to(cr, cx, cy + 8.5);
-    c.cairo_move_to(cr, cx, cy - 8.5);
-    c.cairo_line_to(cr, cx + 6, cy - 3);
-    c.cairo_line_to(cr, cx - 1.5, cy + 0.5);
-    c.cairo_line_to(cr, cx + 6, cy + 5.5);
-    c.cairo_line_to(cr, cx, cy + 8.5);
-    c.cairo_move_to(cr, cx, cy - 8.5);
-    c.cairo_line_to(cr, cx - 6, cy - 3);
-    c.cairo_line_to(cr, cx + 1.5, cy + 0.5);
-    c.cairo_line_to(cr, cx - 6, cy + 5.5);
-    c.cairo_line_to(cr, cx, cy + 8.5);
+    c.cairo_move_to(cr, cx, cy - 8.4);
+    c.cairo_line_to(cr, cx, cy + 8.4);
+    c.cairo_move_to(cr, cx, cy - 8.4);
+    c.cairo_line_to(cr, cx + 5.8, cy - 3.3);
+    c.cairo_line_to(cr, cx - 0.9, cy + 0.1);
+    c.cairo_line_to(cr, cx + 5.8, cy + 5.2);
+    c.cairo_line_to(cr, cx, cy + 8.4);
+    c.cairo_move_to(cr, cx, cy - 8.4);
+    c.cairo_line_to(cr, cx - 5.8, cy - 3.3);
+    c.cairo_line_to(cr, cx + 0.9, cy + 0.1);
+    c.cairo_line_to(cr, cx - 5.8, cy + 5.2);
+    c.cairo_line_to(cr, cx, cy + 8.4);
     c.cairo_stroke(cr);
 
     if (!powered) {
+        c.cairo_new_path(cr);
         c.cairo_move_to(cr, cx - 8, cy - 8);
         c.cairo_line_to(cr, cx + 8, cy + 8);
         c.cairo_stroke(cr);
@@ -497,17 +544,18 @@ fn drawBatteryGlyph(cr: *c.cairo_t, rect: Rect, state: battery.State, alpha: f64
 
 fn drawPowerGlyph(cr: *c.cairo_t, rect: Rect, alpha: f64) void {
     const cx = rect.x + rect.width / 2.0;
-    const cy = rect.y + rect.height / 2.0;
+    const cy = rect.y + rect.height / 2.0 + 0.4;
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
-    c.cairo_set_line_width(cr, 2.0);
+    c.cairo_set_line_width(cr, 1.9);
     c.cairo_set_line_cap(cr, c.CAIRO_LINE_CAP_ROUND);
     c.cairo_set_source_rgba(cr, 0.94, 0.95, 0.97, alpha);
     c.cairo_new_sub_path(cr);
-    c.cairo_arc(cr, cx, cy, 8.5, -pi * 0.82, pi * 0.82);
+    c.cairo_arc(cr, cx, cy, 8.0, -pi * 0.84, pi * 0.84);
     c.cairo_stroke(cr);
+    c.cairo_new_path(cr);
     c.cairo_move_to(cr, cx, cy - 11);
-    c.cairo_line_to(cr, cx, cy - 1);
+    c.cairo_line_to(cr, cx, cy - 1.5);
     c.cairo_stroke(cr);
 }
 

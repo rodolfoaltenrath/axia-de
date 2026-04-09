@@ -1,6 +1,7 @@
 const std = @import("std");
 const c = @import("../wl.zig").c;
 const default_workspace_count = @import("../shell/workspace.zig").default_workspace_count;
+const notification_model = @import("../notification/model.zig");
 const settings_model = @import("../settings/model.zig");
 const toast_model = @import("../toast/model.zig");
 
@@ -30,6 +31,7 @@ pub const ToggleLauncherCallback = *const fn (?*anyopaque) void;
 pub const GetRuntimeStateCallback = *const fn (?*anyopaque) settings_model.RuntimeState;
 pub const SetWorkspaceWrapCallback = *const fn (?*anyopaque, bool) void;
 pub const FocusAppCallback = *const fn (?*anyopaque, []const u8) bool;
+pub const CloseAppCallback = *const fn (?*anyopaque, []const u8) bool;
 pub const ShowPreviewCallback = *const fn (?*anyopaque, []const u8, i32) void;
 pub const HidePreviewCallback = *const fn (?*anyopaque) void;
 pub const UpdateDockGlassCallback = *const fn (?*anyopaque, c.struct_wlr_box, i32) void;
@@ -42,6 +44,8 @@ pub const IpcServer = struct {
     event_source: ?*c.struct_wl_event_source = null,
     toasts: toast_model.State = .{},
     next_toast_id: u32 = 1,
+    notifications: notification_model.State = .{},
+    next_notification_id: u32 = 1,
     ctx: ?*anyopaque = null,
     get_workspace_state_cb: ?GetWorkspaceStateCallback = null,
     activate_workspace_cb: ?ActivateWorkspaceCallback = null,
@@ -51,6 +55,7 @@ pub const IpcServer = struct {
     get_runtime_state_cb: ?GetRuntimeStateCallback = null,
     set_workspace_wrap_cb: ?SetWorkspaceWrapCallback = null,
     focus_app_cb: ?FocusAppCallback = null,
+    close_app_cb: ?CloseAppCallback = null,
     show_preview_cb: ?ShowPreviewCallback = null,
     hide_preview_cb: ?HidePreviewCallback = null,
     update_dock_glass_cb: ?UpdateDockGlassCallback = null,
@@ -94,6 +99,7 @@ pub const IpcServer = struct {
         get_runtime_state_cb: GetRuntimeStateCallback,
         set_workspace_wrap_cb: SetWorkspaceWrapCallback,
         focus_app_cb: FocusAppCallback,
+        close_app_cb: CloseAppCallback,
         show_preview_cb: ShowPreviewCallback,
         hide_preview_cb: HidePreviewCallback,
         update_dock_glass_cb: UpdateDockGlassCallback,
@@ -107,6 +113,7 @@ pub const IpcServer = struct {
         self.get_runtime_state_cb = get_runtime_state_cb;
         self.set_workspace_wrap_cb = set_workspace_wrap_cb;
         self.focus_app_cb = focus_app_cb;
+        self.close_app_cb = close_app_cb;
         self.show_preview_cb = show_preview_cb;
         self.hide_preview_cb = hide_preview_cb;
         self.update_dock_glass_cb = update_dock_glass_cb;
@@ -145,7 +152,7 @@ pub const IpcServer = struct {
     }
 
     fn handleClient(self: *IpcServer, client_fd: std.posix.socket_t) void {
-        var buffer: [128]u8 = undefined;
+        var buffer: [512]u8 = undefined;
         const read_len = std.posix.read(client_fd, &buffer) catch return;
         if (read_len == 0) return;
 
@@ -224,6 +231,17 @@ pub const IpcServer = struct {
                 return;
             }
             const handled = if (self.focus_app_cb) |callback| callback(self.ctx, app_id) else false;
+            _ = std.posix.write(client_fd, if (handled) "ok\n" else "error not-found\n") catch {};
+            return;
+        }
+
+        if (std.mem.startsWith(u8, request, "app close ")) {
+            const app_id = std.mem.trim(u8, request["app close ".len..], " \r\n\t");
+            if (app_id.len == 0) {
+                _ = std.posix.write(client_fd, "error invalid-app\n") catch {};
+                return;
+            }
+            const handled = if (self.close_app_cb) |callback| callback(self.ctx, app_id) else false;
             _ = std.posix.write(client_fd, if (handled) "ok\n" else "error not-found\n") catch {};
             return;
         }
@@ -337,6 +355,39 @@ pub const IpcServer = struct {
             return;
         }
 
+        if (std.mem.startsWith(u8, request, "notification push ")) {
+            const payload = std.mem.trim(u8, request["notification push ".len..], " \r\n\t");
+            var parts = std.mem.tokenizeScalar(u8, payload, ' ');
+            const raw_level = parts.next() orelse {
+                _ = std.posix.write(client_fd, "error invalid-notification\n") catch {};
+                return;
+            };
+            const message = std.mem.trimLeft(u8, payload[raw_level.len..], " ");
+            const level = notification_model.parseLevel(raw_level) orelse {
+                _ = std.posix.write(client_fd, "error invalid-notification\n") catch {};
+                return;
+            };
+            if (message.len == 0) {
+                _ = std.posix.write(client_fd, "error invalid-notification\n") catch {};
+                return;
+            }
+            self.pushNotification(level, message);
+            _ = std.posix.write(client_fd, "ok\n") catch {};
+            return;
+        }
+
+        if (std.mem.eql(u8, request, "notification get")) {
+            self.writeNotificationState(client_fd);
+            return;
+        }
+
+        if (std.mem.startsWith(u8, request, "notification dnd ")) {
+            const raw_enabled = std.mem.trim(u8, request["notification dnd ".len..], " \r\n\t");
+            self.notifications.do_not_disturb = std.mem.eql(u8, raw_enabled, "1") or std.ascii.eqlIgnoreCase(raw_enabled, "true");
+            self.writeNotificationState(client_fd);
+            return;
+        }
+
         _ = std.posix.write(client_fd, "error unknown-command\n") catch {};
     }
 
@@ -415,6 +466,25 @@ pub const IpcServer = struct {
         _ = std.posix.write(client_fd, stream.getWritten()) catch {};
     }
 
+    fn writeNotificationState(self: *IpcServer, client_fd: std.posix.socket_t) void {
+        self.cleanupExpiredNotifications();
+
+        var response: [16384]u8 = undefined;
+        var stream = std.io.fixedBufferStream(&response);
+        const writer = stream.writer();
+
+        writer.print("ok notifications {} {}\n", .{ self.notifications.count, @intFromBool(self.notifications.do_not_disturb) }) catch return;
+        for (0..self.notifications.count) |index| {
+            const item = self.notifications.items[index];
+            writer.print(
+                "notification {} {} {s} {s}\n",
+                .{ item.id, item.created_ms, notification_model.levelName(item.level), item.messageText() },
+            ) catch return;
+        }
+
+        _ = std.posix.write(client_fd, stream.getWritten()) catch {};
+    }
+
     fn pushToast(self: *IpcServer, level: toast_model.Level, message: []const u8) void {
         self.cleanupExpiredToasts();
         if (self.toasts.count == self.toasts.items.len) {
@@ -446,5 +516,38 @@ pub const IpcServer = struct {
             write_index += 1;
         }
         self.toasts.count = write_index;
+    }
+
+    fn pushNotification(self: *IpcServer, level: notification_model.Level, message: []const u8) void {
+        self.cleanupExpiredNotifications();
+        if (self.notifications.count == self.notifications.items.len) {
+            var index: usize = 1;
+            while (index < self.notifications.count) : (index += 1) {
+                self.notifications.items[index - 1] = self.notifications.items[index];
+            }
+            self.notifications.count -= 1;
+        }
+
+        var item = notification_model.Notification{
+            .id = self.next_notification_id,
+            .level = level,
+            .created_ms = std.time.milliTimestamp(),
+        };
+        self.next_notification_id +%= 1;
+        notification_model.copyMessage(&item, message);
+        self.notifications.items[self.notifications.count] = item;
+        self.notifications.count += 1;
+    }
+
+    fn cleanupExpiredNotifications(self: *IpcServer) void {
+        const now_ms = std.time.milliTimestamp();
+        var write_index: usize = 0;
+        for (0..self.notifications.count) |index| {
+            const item = self.notifications.items[index];
+            if (now_ms - item.created_ms >= notification_model.retention_ms) continue;
+            self.notifications.items[write_index] = item;
+            write_index += 1;
+        }
+        self.notifications.count = write_index;
     }
 };

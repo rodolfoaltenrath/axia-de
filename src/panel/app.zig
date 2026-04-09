@@ -7,6 +7,7 @@ const bluetooth = @import("bluetooth.zig");
 const bluetooth_popup = @import("bluetooth_popup.zig");
 const network = @import("network.zig");
 const network_popup = @import("network_popup.zig");
+const notifications_popup = @import("notifications_popup.zig");
 const power_popup = @import("power_popup.zig");
 const toast_popup = @import("toast_popup.zig");
 const c = @import("wl.zig").c;
@@ -18,8 +19,10 @@ const render = @import("render.zig");
 const workspaces = @import("workspaces.zig");
 const launcher_state = @import("launcher_state");
 const prefs = @import("axia_prefs");
+const notification_client = @import("notification_client");
 const settings_model = @import("settings_model");
 const runtime_catalog = @import("runtime_catalog");
+const notification_model = @import("notification_model");
 const toast_model = @import("toast_model");
 
 const log = std.log.scoped(.axia_panel);
@@ -29,6 +32,7 @@ const SurfaceRole = enum {
     panel,
     dismiss_overlay,
     clock_popup,
+    notifications_popup,
     power_popup,
     battery_popup,
     network_popup,
@@ -86,6 +90,7 @@ pub const App = struct {
     running: bool = true,
     clock_popup_visible: bool = false,
     power_popup_visible: bool = false,
+    notifications_popup_visible: bool = false,
     battery_popup_visible: bool = false,
     network_popup_visible: bool = false,
     bluetooth_popup_visible: bool = false,
@@ -104,15 +109,18 @@ pub const App = struct {
     battery_state: battery.State = .{},
     network_state: network.State = .{},
     bluetooth_state: bluetooth.State = .{},
+    notification_state: notification_model.State = .{},
     toast_state: toast_model.State = .{},
     last_audio_refresh_ms: i64 = 0,
     last_toast_refresh_ms: i64 = 0,
+    last_notification_refresh_ms: i64 = 0,
     last_battery_refresh_ms: i64 = 0,
     last_network_refresh_ms: i64 = 0,
     last_bluetooth_refresh_ms: i64 = 0,
     panel: SurfaceState = .{ .role = .panel },
     dismiss_overlay: SurfaceState = .{ .role = .dismiss_overlay },
     popup: SurfaceState = .{ .role = .clock_popup },
+    notifications_popup: SurfaceState = .{ .role = .notifications_popup },
     power_popup: SurfaceState = .{ .role = .power_popup },
     battery_popup: SurfaceState = .{ .role = .battery_popup },
     network_popup: SurfaceState = .{ .role = .network_popup },
@@ -129,6 +137,7 @@ pub const App = struct {
     pointer_listener: c.struct_wl_pointer_listener = undefined,
 
     const panel_height: u32 = 40;
+    const panel_popup_top_gap: u32 = 2;
     const popup_width: u32 = 376;
     const popup_height: u32 = 442;
 
@@ -166,6 +175,7 @@ pub const App = struct {
         _ = bluetooth.refresh(allocator, &app.bluetooth_state);
         app.last_audio_refresh_ms = std.time.milliTimestamp();
         app.last_toast_refresh_ms = app.last_audio_refresh_ms;
+        app.last_notification_refresh_ms = app.last_audio_refresh_ms;
         app.last_battery_refresh_ms = app.last_audio_refresh_ms;
         app.last_network_refresh_ms = app.last_audio_refresh_ms;
         app.last_bluetooth_refresh_ms = app.last_audio_refresh_ms;
@@ -191,6 +201,7 @@ pub const App = struct {
         self.workspace_popup.destroy();
         self.launcher_popup.destroy();
         self.toast_popup.destroy();
+        self.notifications_popup.destroy();
         self.power_popup.destroy();
         self.battery_popup.destroy();
         self.network_popup.destroy();
@@ -227,6 +238,7 @@ pub const App = struct {
             self.tickBluetooth();
             self.tickAudio();
             self.tickToasts();
+            self.tickNotifications();
             try self.redrawIfNeeded();
 
             if (c.wl_display_dispatch_pending(self.display) < 0) {
@@ -312,7 +324,7 @@ pub const App = struct {
         ) orelse return error.LayerSurfaceCreateFailed;
 
         c.zwlr_layer_surface_v1_set_anchor(layer_surface, c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP);
-        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 8, 0, 0, 0);
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_popup_top_gap, 0, 0, 0);
         c.zwlr_layer_surface_v1_set_size(layer_surface, popup_width, popup_height);
         c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
         c.zwlr_layer_surface_v1_set_keyboard_interactivity(
@@ -330,6 +342,48 @@ pub const App = struct {
 
     fn destroyClockPopup(self: *App) void {
         self.popup.destroy();
+    }
+
+    fn createNotificationsPopup(self: *App) !void {
+        if (self.notifications_popup.layer_surface != null) return;
+        try self.ensureDismissOverlay();
+
+        const compositor = self.compositor orelse return error.CompositorMissing;
+        const layer_shell = self.layer_shell orelse return error.LayerShellMissing;
+
+        const wl_surface = c.wl_compositor_create_surface(compositor) orelse return error.SurfaceCreateFailed;
+        errdefer c.wl_surface_destroy(wl_surface);
+
+        const layer_surface = c.zwlr_layer_shell_v1_get_layer_surface(
+            layer_shell,
+            wl_surface,
+            null,
+            c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+            "axia-panel-notifications",
+        ) orelse return error.LayerSurfaceCreateFailed;
+
+        c.zwlr_layer_surface_v1_set_anchor(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
+        );
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_popup_top_gap, 182, 0, 0);
+        c.zwlr_layer_surface_v1_set_size(layer_surface, notifications_popup.popup_width, notifications_popup.popup_height);
+        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
+        c.zwlr_layer_surface_v1_set_keyboard_interactivity(
+            layer_surface,
+            c.ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE,
+        );
+
+        self.notifications_popup.wl_surface = wl_surface;
+        self.notifications_popup.layer_surface = layer_surface;
+        self.notifications_popup.dirty = true;
+        self.installSurfaceListeners(&self.notifications_popup);
+
+        c.wl_surface_commit(wl_surface);
+    }
+
+    fn destroyNotificationsPopup(self: *App) void {
+        self.notifications_popup.destroy();
     }
 
     fn createPowerPopup(self: *App) !void {
@@ -354,7 +408,7 @@ pub const App = struct {
             layer_surface,
             c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
         );
-        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 2, 8, 0, 0);
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_popup_top_gap, 8, 0, 0);
         c.zwlr_layer_surface_v1_set_size(layer_surface, power_popup.popup_width, power_popup.popup_height);
         c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
         c.zwlr_layer_surface_v1_set_keyboard_interactivity(
@@ -396,7 +450,7 @@ pub const App = struct {
             layer_surface,
             c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
         );
-        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 2, 138, 0, 0);
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_popup_top_gap, 138, 0, 0);
         c.zwlr_layer_surface_v1_set_size(layer_surface, battery_popup.popup_width, battery_popup.popup_height);
         c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
         c.zwlr_layer_surface_v1_set_keyboard_interactivity(
@@ -438,7 +492,7 @@ pub const App = struct {
             layer_surface,
             c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
         );
-        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 2, 96, 0, 0);
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_popup_top_gap, 96, 0, 0);
         c.zwlr_layer_surface_v1_set_size(layer_surface, network_popup.popup_width, network_popup.popup_height);
         c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
         c.zwlr_layer_surface_v1_set_keyboard_interactivity(
@@ -480,7 +534,7 @@ pub const App = struct {
             layer_surface,
             c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
         );
-        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 2, 54, 0, 0);
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_popup_top_gap, 54, 0, 0);
         c.zwlr_layer_surface_v1_set_size(layer_surface, bluetooth_popup.popup_width, bluetooth_popup.popup_height);
         c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
         c.zwlr_layer_surface_v1_set_keyboard_interactivity(
@@ -522,7 +576,7 @@ pub const App = struct {
             layer_surface,
             c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
         );
-        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 2, 12, 0, 0);
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_popup_top_gap, 12, 0, 0);
         c.zwlr_layer_surface_v1_set_size(layer_surface, audio_popup.popup_width, audio_popup.popup_height);
         c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
         c.zwlr_layer_surface_v1_set_keyboard_interactivity(
@@ -564,7 +618,7 @@ pub const App = struct {
             layer_surface,
             c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT,
         );
-        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 8, 0, 0, 16);
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_popup_top_gap, 0, 0, 16);
         c.zwlr_layer_surface_v1_set_size(layer_surface, workspaces.popup_width, workspaces.popup_height);
         c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
         c.zwlr_layer_surface_v1_set_keyboard_interactivity(
@@ -606,7 +660,7 @@ pub const App = struct {
             layer_surface,
             c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | c.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT,
         );
-        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_height + 8, 0, 0, 16);
+        c.zwlr_layer_surface_v1_set_margin(layer_surface, panel_popup_top_gap, 0, 0, 16);
         c.zwlr_layer_surface_v1_set_size(layer_surface, launcher.popup_width, launcher.popup_height);
         c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, 0);
         c.zwlr_layer_surface_v1_set_keyboard_interactivity(
@@ -706,7 +760,7 @@ pub const App = struct {
     }
 
     fn updateDismissOverlay(self: *App) void {
-        const keep = self.clock_popup_visible or self.power_popup_visible or self.battery_popup_visible or self.network_popup_visible or self.bluetooth_popup_visible or self.audio_popup_visible or self.workspace_popup_visible or self.launcher_popup_visible;
+        const keep = self.clock_popup_visible or self.notifications_popup_visible or self.power_popup_visible or self.battery_popup_visible or self.network_popup_visible or self.bluetooth_popup_visible or self.audio_popup_visible or self.workspace_popup_visible or self.launcher_popup_visible;
         if (!keep) {
             self.dismiss_overlay.destroy();
         }
@@ -732,6 +786,7 @@ pub const App = struct {
         if (self.panel.dirty) try self.drawSurface(&self.panel);
         if (self.dismiss_overlay.layer_surface != null and self.dismiss_overlay.dirty) try self.drawSurface(&self.dismiss_overlay);
         if (self.clock_popup_visible and self.popup.dirty) try self.drawSurface(&self.popup);
+        if (self.notifications_popup_visible and self.notifications_popup.dirty) try self.drawSurface(&self.notifications_popup);
         if (self.power_popup_visible and self.power_popup.dirty) try self.drawSurface(&self.power_popup);
         if (self.battery_popup_visible and self.battery_popup.dirty) try self.drawSurface(&self.battery_popup);
         if (self.network_popup_visible and self.network_popup.dirty) try self.drawSurface(&self.network_popup);
@@ -759,9 +814,10 @@ pub const App = struct {
 
         const buffer = &surface.buffer.?;
         switch (surface.role) {
-            .panel => render.drawPanel(buffer.cr, surface.width, surface.height, self.now, self.panel_hovered, self.audio_state, self.battery_state, self.network_state, self.bluetooth_state, self.preferences),
+            .panel => render.drawPanel(buffer.cr, surface.width, surface.height, self.now, self.panel_hovered, self.audio_state, self.battery_state, self.network_state, self.bluetooth_state, self.notification_state, self.preferences),
             .dismiss_overlay => drawDismissOverlay(buffer.cr),
             .clock_popup => render.drawCalendarPopup(buffer.cr, surface.width, surface.height, self.month_cursor, self.now, self.preferences),
+            .notifications_popup => notifications_popup.drawPopup(buffer.cr, surface.width, surface.height, self.notification_state, self.preferences),
             .power_popup => power_popup.drawPopup(buffer.cr, surface.width, surface.height, self.preferences),
             .battery_popup => battery_popup.drawPopup(buffer.cr, surface.width, surface.height, self.battery_state, self.preferences),
             .network_popup => network_popup.drawPopup(buffer.cr, surface.width, surface.height, self.network_state, self.preferences),
@@ -784,6 +840,7 @@ pub const App = struct {
                     .panel => "panel",
                     .dismiss_overlay => "dismiss-overlay",
                     .clock_popup => "clock-popup",
+                    .notifications_popup => "notifications-popup",
                     .power_popup => "power-popup",
                     .battery_popup => "battery-popup",
                     .network_popup => "network-popup",
@@ -810,6 +867,7 @@ pub const App = struct {
         self.panel.dirty = true;
         if (self.dismiss_overlay.layer_surface != null) self.dismiss_overlay.dirty = true;
         if (self.clock_popup_visible) self.popup.dirty = true;
+        if (self.notifications_popup_visible) self.notifications_popup.dirty = true;
         if (self.power_popup_visible) self.power_popup.dirty = true;
         if (self.battery_popup_visible) self.battery_popup.dirty = true;
         if (self.network_popup_visible) self.network_popup.dirty = true;
@@ -881,6 +939,21 @@ pub const App = struct {
         }
     }
 
+    fn tickNotifications(self: *App) void {
+        const socket_path = self.ipc_socket_path orelse return;
+        const now_ms = std.time.milliTimestamp();
+        const interval_ms: i64 = if (self.notifications_popup_visible) 900 else 2200;
+        if (now_ms - self.last_notification_refresh_ms < interval_ms) return;
+        self.last_notification_refresh_ms = now_ms;
+
+        const next = ipc.getNotifications(self.allocator, socket_path) catch return;
+        if (notification_model.equal(self.notification_state, next)) return;
+
+        self.notification_state = next;
+        self.panel.dirty = true;
+        if (self.notifications_popup_visible) self.notifications_popup.dirty = true;
+    }
+
     fn refreshPreferences(self: *App) bool {
         var loaded = prefs.load(self.allocator) catch return false;
         defer loaded.deinit();
@@ -889,6 +962,11 @@ pub const App = struct {
         if (preferencesEqual(self.preferences, next)) return false;
         self.preferences = next;
         return true;
+    }
+
+    fn pushNotification(self: *App, level: notification_model.Level, message: []const u8) void {
+        const socket_path = self.ipc_socket_path orelse return;
+        notification_client.push(self.allocator, socket_path, level, message) catch {};
     }
 
     fn setSeat(self: *App, seat: *c.struct_wl_seat) void {
@@ -928,6 +1006,20 @@ pub const App = struct {
             return;
         }
 
+        if (self.pointer_role == .notifications_popup and self.notifications_popup_visible) {
+            if (notifications_popup.hitTest(x, y) == .do_not_disturb) {
+                const socket_path = self.ipc_socket_path orelse return;
+                const next_state = ipc.setDoNotDisturb(self.allocator, socket_path, !self.notification_state.do_not_disturb) catch |err| {
+                    log.err("failed to update do not disturb: {}", .{err});
+                    return;
+                };
+                self.notification_state = next_state;
+                self.panel.dirty = true;
+                self.notifications_popup.dirty = true;
+            }
+            return;
+        }
+
         if (self.pointer_role == .power_popup and self.power_popup_visible) {
             if (power_popup.hitTest(x, y)) |target| {
                 self.runPowerAction(target);
@@ -949,6 +1041,7 @@ pub const App = struct {
                             log.err("failed to toggle wifi: {}", .{err});
                             return;
                         };
+                        self.pushNotification(.info, if (enabled) "Wi-Fi ligado." else "Wi-Fi desligado.");
                     },
                     .network => |index| {
                         if (index < self.network_state.networks.count) {
@@ -958,6 +1051,9 @@ pub const App = struct {
                                     log.err("failed to connect wifi network: {}", .{err});
                                     return;
                                 };
+                                var message_buf: [192]u8 = undefined;
+                                const message = std.fmt.bufPrint(&message_buf, "Tentando conectar em {s}.", .{item.ssidText()}) catch "Tentando conectar em uma rede Wi-Fi.";
+                                self.pushNotification(.info, message);
                             }
                         }
                     },
@@ -979,6 +1075,7 @@ pub const App = struct {
                             log.err("failed to toggle bluetooth power: {}", .{err});
                             return;
                         };
+                        self.pushNotification(.info, if (powered) "Bluetooth ligado." else "Bluetooth desligado.");
                     },
                     .device => |index| {
                         if (index < self.bluetooth_state.devices.count) {
@@ -988,11 +1085,17 @@ pub const App = struct {
                                     log.err("failed to disconnect bluetooth device: {}", .{err});
                                     return;
                                 };
+                                var message_buf: [224]u8 = undefined;
+                                const message = std.fmt.bufPrint(&message_buf, "Desconectando {s}.", .{device.nameText()}) catch "Desconectando dispositivo Bluetooth.";
+                                self.pushNotification(.info, message);
                             } else {
                                 bluetooth.connectDevice(self.allocator, device.addressText()) catch |err| {
                                     log.err("failed to connect bluetooth device: {}", .{err});
                                     return;
                                 };
+                                var message_buf: [224]u8 = undefined;
+                                const message = std.fmt.bufPrint(&message_buf, "Tentando conectar {s}.", .{device.nameText()}) catch "Tentando conectar dispositivo Bluetooth.";
+                                self.pushNotification(.info, message);
                             }
                         }
                     },
@@ -1026,6 +1129,9 @@ pub const App = struct {
                                 log.err("failed to set default sink: {}", .{err});
                                 return;
                             };
+                            var message_buf: [224]u8 = undefined;
+                            const message = std.fmt.bufPrint(&message_buf, "Saida alterada para {s}.", .{self.audio_state.sinks.items[index].labelText()}) catch "Saida de audio alterada.";
+                            self.pushNotification(.info, message);
                         }
                     },
                     .source_device => |index| {
@@ -1034,6 +1140,9 @@ pub const App = struct {
                                 log.err("failed to set default source: {}", .{err});
                                 return;
                             };
+                            var message_buf: [224]u8 = undefined;
+                            const message = std.fmt.bufPrint(&message_buf, "Entrada alterada para {s}.", .{self.audio_state.sources.items[index].labelText()}) catch "Entrada de audio alterada.";
+                            self.pushNotification(.info, message);
                         }
                     },
                 }
@@ -1065,6 +1174,7 @@ pub const App = struct {
 
         if (self.pointer_role == .dismiss_overlay) {
             if (self.clock_popup_visible) self.toggleClockPopup();
+            if (self.notifications_popup_visible) self.toggleNotificationsPopup();
             if (self.power_popup_visible) self.togglePowerPopup();
             if (self.battery_popup_visible) self.toggleBatteryPopup();
             if (self.network_popup_visible) self.toggleNetworkPopup();
@@ -1078,6 +1188,10 @@ pub const App = struct {
         const metrics = render.computePanelMetrics(self.panel.width, panel_height, self.battery_state.available, self.network_state.available, self.bluetooth_state.available);
         if (metrics.power.contains(x, y)) {
             self.togglePowerPopup();
+            return;
+        }
+        if (metrics.notifications.contains(x, y)) {
+            self.toggleNotificationsPopup();
             return;
         }
         if (self.battery_state.available and metrics.battery.contains(x, y)) {
@@ -1115,6 +1229,7 @@ pub const App = struct {
 
         if (self.pointer_role == .panel) {
             if (self.clock_popup_visible) self.toggleClockPopup();
+            if (self.notifications_popup_visible) self.toggleNotificationsPopup();
             if (self.power_popup_visible) self.togglePowerPopup();
             if (self.battery_popup_visible) self.toggleBatteryPopup();
             if (self.network_popup_visible) self.toggleNetworkPopup();
@@ -1138,6 +1253,27 @@ pub const App = struct {
             self.popup.dirty = true;
         } else {
             self.destroyClockPopup();
+            self.updateDismissOverlay();
+        }
+    }
+
+    fn toggleNotificationsPopup(self: *App) void {
+        if (!self.notifications_popup_visible) self.closeOtherPopups(.notifications_popup);
+        self.notifications_popup_visible = !self.notifications_popup_visible;
+        if (self.notifications_popup_visible) {
+            const socket_path = self.ipc_socket_path orelse return;
+            self.notification_state = ipc.getNotifications(self.allocator, socket_path) catch self.notification_state;
+            self.last_notification_refresh_ms = std.time.milliTimestamp();
+            self.createNotificationsPopup() catch |err| {
+                self.notifications_popup_visible = false;
+                log.err("failed to create notifications popup: {}", .{err});
+                return;
+            };
+            self.panel.dirty = true;
+            self.notifications_popup.dirty = true;
+        } else {
+            self.destroyNotificationsPopup();
+            self.panel.dirty = true;
             self.updateDismissOverlay();
         }
     }
@@ -1275,6 +1411,7 @@ pub const App = struct {
 
     fn closeOtherPopups(self: *App, keep: SurfaceRole) void {
         if (keep != .clock_popup and self.clock_popup_visible) self.toggleClockPopup();
+        if (keep != .notifications_popup and self.notifications_popup_visible) self.toggleNotificationsPopup();
         if (keep != .power_popup and self.power_popup_visible) self.togglePowerPopup();
         if (keep != .battery_popup and self.battery_popup_visible) self.toggleBatteryPopup();
         if (keep != .network_popup and self.network_popup_visible) self.toggleNetworkPopup();
@@ -1398,6 +1535,7 @@ pub const App = struct {
             .panel => default_output_width,
             .dismiss_overlay => default_output_width,
             .clock_popup => popup_width,
+            .notifications_popup => notifications_popup.popup_width,
             .power_popup => power_popup.popup_width,
             .battery_popup => battery_popup.popup_width,
             .network_popup => network_popup.popup_width,
@@ -1411,6 +1549,7 @@ pub const App = struct {
             .panel => panel_height,
             .dismiss_overlay => 720,
             .clock_popup => popup_height,
+            .notifications_popup => notifications_popup.popup_height,
             .power_popup => power_popup.popup_height,
             .battery_popup => battery_popup.popup_height,
             .network_popup => network_popup.popup_height,
@@ -1430,6 +1569,7 @@ pub const App = struct {
                     .panel => "panel",
                     .dismiss_overlay => "dismiss-overlay",
                     .clock_popup => "clock-popup",
+                    .notifications_popup => "notifications-popup",
                     .power_popup => "power-popup",
                     .battery_popup => "battery-popup",
                     .network_popup => "network-popup",
@@ -1469,6 +1609,8 @@ pub const App = struct {
             app.pointer_role = .dismiss_overlay;
         } else if (app.popup.wl_surface != null and app.popup.wl_surface.? == wl_surface) {
             app.pointer_role = .clock_popup;
+        } else if (app.notifications_popup.wl_surface != null and app.notifications_popup.wl_surface.? == wl_surface) {
+            app.pointer_role = .notifications_popup;
         } else if (app.power_popup.wl_surface != null and app.power_popup.wl_surface.? == wl_surface) {
             app.pointer_role = .power_popup;
         } else if (app.battery_popup.wl_surface != null and app.battery_popup.wl_surface.? == wl_surface) {

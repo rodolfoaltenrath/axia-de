@@ -16,12 +16,33 @@ const preferences_sync_interval_ms: i64 = 320;
 const auto_hide_grace_ms: i64 = 260;
 const preview_hover_delay_ms: i64 = 220;
 const preview_suppression_after_click_ms: i64 = 520;
+const drag_start_threshold: f64 = 8.0;
+const context_menu_extra_height: u32 = 80;
 
 const GlassBox = struct {
     x: i32,
     y: i32,
     width: i32,
     height: i32,
+};
+
+const ContextMenuState = struct {
+    open: bool = false,
+    item_index: usize = 0,
+    pinned: bool = false,
+};
+
+const DragState = struct {
+    pressed_index: ?usize = null,
+    source_index: usize = 0,
+    target_index: usize = 0,
+    press_x: f64 = 0,
+    press_y: f64 = 0,
+    active: bool = false,
+
+    fn clear(self: *DragState) void {
+        self.* = .{};
+    }
 };
 
 const SurfaceState = struct {
@@ -69,6 +90,8 @@ pub const App = struct {
     pointer_x: f64 = 0,
     pointer_y: f64 = 0,
     hovered_index: ?usize = null,
+    all_apps_hovered: bool = false,
+    pressed_hit: render.HitTarget = .none,
     hovered_since_ms: i64 = 0,
     last_runtime_sync_ms: i64 = 0,
     previewed_index: ?usize = null,
@@ -80,6 +103,8 @@ pub const App = struct {
     slide_offset_y: f64 = 0,
     last_glass_box: ?GlassBox = null,
     last_glass_surface_height: i32 = 0,
+    context_menu: ContextMenuState = .{},
+    drag: DragState = .{},
     catalog: runtime_catalog.Catalog,
     dock_config: dock_style.Config = dock_style.defaultConfig(),
     favorites: std.ArrayListUnmanaged(runtime_catalog.AppEntry) = .empty,
@@ -209,7 +234,7 @@ pub const App = struct {
                 c.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
                 c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT,
         );
-        const preferred_height = self.dock_config.style.preferredSurfaceHeight();
+        const preferred_height = self.currentPreferredSurfaceHeight();
         c.zwlr_layer_surface_v1_set_size(layer_surface, 0, preferred_height);
         c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, if (self.dock_config.auto_hide) 0 else @intCast(preferred_height));
         c.zwlr_layer_surface_v1_set_keyboard_interactivity(
@@ -253,8 +278,16 @@ pub const App = struct {
             self.display_open_apps.items,
             &self.icons,
             self.hovered_index,
+            self.all_apps_hovered,
+            false,
             self.dock_config.style,
             self.slide_offset_y,
+            if (self.context_menu.open) .{
+                .item_index = self.context_menu.item_index,
+                .pinned = self.context_menu.pinned,
+            } else null,
+            if (self.drag.active) self.drag.target_index else null,
+            self.favorites.items.len,
         );
 
         c.cairo_surface_flush(buffer.surface);
@@ -301,7 +334,7 @@ pub const App = struct {
 
     fn updateHover(self: *App) void {
         if (!self.surface.configured) return;
-        const new_hovered = render.hitTest(
+        const hit = render.hitTest(
             self.surface.width,
             self.surface.height,
             self.pointer_x,
@@ -310,13 +343,29 @@ pub const App = struct {
             self.dock_config.style,
             self.slide_offset_y,
         );
-        if (new_hovered != self.hovered_index) {
+        var new_hovered: ?usize = null;
+        var new_all_apps_hovered = false;
+        switch (hit) {
+            .none => {},
+            .app => |index| new_hovered = index,
+            .all_apps => new_all_apps_hovered = true,
+        }
+        if (new_hovered != self.hovered_index or new_all_apps_hovered != self.all_apps_hovered) {
             self.hovered_index = new_hovered;
+            self.all_apps_hovered = new_all_apps_hovered;
             self.hovered_since_ms = if (new_hovered != null) std.time.milliTimestamp() else 0;
             if (self.previewed_index != null and self.previewed_index != new_hovered) {
                 self.hidePreview();
             }
             self.surface.dirty = true;
+        }
+
+        if (self.drag.active) {
+            const next_target = self.favoriteDropIndexForPointer();
+            if (next_target != self.drag.target_index) {
+                self.drag.target_index = next_target;
+                self.surface.dirty = true;
+            }
         }
     }
 
@@ -372,10 +421,15 @@ pub const App = struct {
     fn applyLayerPreferences(self: *App) !void {
         const layer_surface = self.surface.layer_surface orelse return;
         const wl_surface = self.surface.wl_surface orelse return;
-        const preferred_height = self.dock_config.style.preferredSurfaceHeight();
+        const preferred_height = self.currentPreferredSurfaceHeight();
         c.zwlr_layer_surface_v1_set_size(layer_surface, 0, preferred_height);
-        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, if (self.dock_config.auto_hide) 0 else @intCast(preferred_height));
+        c.zwlr_layer_surface_v1_set_exclusive_zone(layer_surface, if (self.dock_config.auto_hide) 0 else @intCast(self.dock_config.style.preferredSurfaceHeight()));
         c.wl_surface_commit(wl_surface);
+    }
+
+    fn currentPreferredSurfaceHeight(self: *const App) u32 {
+        const base = self.dock_config.style.preferredSurfaceHeight();
+        return if (self.context_menu.open) base + context_menu_extra_height else base;
     }
 
     fn rebuildDisplayEntries(self: *App) !void {
@@ -404,9 +458,31 @@ pub const App = struct {
         self.display_open_apps = next_open_apps;
 
         if (!entries_changed) return;
+        try self.icons.syncEntries(self.display_entries.items);
+    }
 
-        self.icons.deinit();
-        self.icons = try dock_icons.IconCache.init(self.allocator, self.display_entries.items);
+    fn reloadFavorites(self: *App) !void {
+        self.favorites.deinit(self.allocator);
+        self.favorites = try launcher_state.loadFavoriteEntries(self.allocator, &self.catalog);
+        try self.rebuildDisplayEntries();
+        self.surface.dirty = true;
+    }
+
+    fn applyFavoriteToggleInMemory(self: *App, entry: runtime_catalog.AppEntry, pinned: bool) !void {
+        if (pinned) {
+            if (!containsEntry(self.favorites.items, entry.id)) {
+                try self.favorites.append(self.allocator, entry);
+            }
+        } else {
+            for (self.favorites.items, 0..) |favorite, index| {
+                if (!std.mem.eql(u8, favorite.id, entry.id)) continue;
+                _ = self.favorites.orderedRemove(index);
+                break;
+            }
+        }
+
+        try self.rebuildDisplayEntries();
+        self.surface.dirty = true;
     }
 
     fn refreshDisplayOpenApps(self: *App) bool {
@@ -438,6 +514,38 @@ pub const App = struct {
         child.stdout_behavior = .Ignore;
         child.stderr_behavior = .Ignore;
         try child.spawn();
+    }
+
+    fn spawnSiblingBinary(self: *App, binary_name: []const u8) !void {
+        const env_bin_dir = std.process.getEnvVarOwned(self.allocator, "AXIA_BIN_DIR") catch null;
+        defer if (env_bin_dir) |dir| self.allocator.free(dir);
+
+        const binary_path = if (env_bin_dir) |dir|
+            try std.fs.path.join(self.allocator, &.{ dir, binary_name })
+        else blk: {
+            const exe_dir = try std.fs.selfExeDirPathAlloc(self.allocator);
+            defer self.allocator.free(exe_dir);
+            break :blk try std.fs.path.join(self.allocator, &.{ exe_dir, binary_name });
+        };
+        defer self.allocator.free(binary_path);
+
+        const argv: []const []const u8 = &.{binary_path};
+        var child = std.process.Child.init(argv, self.allocator);
+        child.stdin_behavior = .Ignore;
+        child.stdout_behavior = .Ignore;
+        child.stderr_behavior = .Inherit;
+        try child.spawn();
+    }
+
+    fn findOpenAppById(self: *const App, app_id: []const u8) ?dock_ipc.OpenAppInfo {
+        for (self.open_apps.apps[0..self.open_apps.count]) |open_app| {
+            if (std.mem.eql(u8, open_app.idText(), app_id)) return open_app;
+        }
+        return null;
+    }
+
+    fn isAppGridOpen(self: *const App) bool {
+        return self.findOpenAppById("axia-app-grid") != null;
     }
 
     fn handleGlobal(data: ?*anyopaque, _: ?*c.struct_wl_registry, name: u32, interface: [*c]const u8, version: u32) callconv(.c) void {
@@ -492,7 +600,7 @@ pub const App = struct {
         const zwlr_surface = layer_surface orelse return;
         c.zwlr_layer_surface_v1_ack_configure(zwlr_surface, serial);
         app.surface.width = if (width == 0) default_output_width else width;
-        app.surface.height = if (height == 0) app.dock_config.style.preferredSurfaceHeight() else height;
+        app.surface.height = if (height == 0) app.currentPreferredSurfaceHeight() else height;
         app.surface.configured = true;
         app.surface.dirty = true;
         app.syncGlassRegion() catch {};
@@ -528,6 +636,9 @@ pub const App = struct {
         app.hide_deadline_ms = std.time.milliTimestamp() + auto_hide_grace_ms;
         app.hovered_since_ms = 0;
         app.hovered_index = null;
+        app.all_apps_hovered = false;
+        app.pressed_hit = .none;
+        app.drag.clear();
         app.hidePreview();
         app.surface.dirty = true;
     }
@@ -539,38 +650,33 @@ pub const App = struct {
         app.hide_deadline_ms = 0;
         app.pointer_x = c.wl_fixed_to_double(surface_x);
         app.pointer_y = c.wl_fixed_to_double(surface_y);
+        app.updateDragState();
         app.updateHover();
     }
 
     fn handlePointerButton(data: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: u32, button: u32, state: u32) callconv(.c) void {
-        if (state != c.WL_POINTER_BUTTON_STATE_PRESSED or button != 0x110) return;
         const raw_app = data orelse return;
         const app: *App = @ptrCast(@alignCast(raw_app));
-        app.hidePreview();
-        app.preview_suppressed_until_ms = std.time.milliTimestamp() + preview_suppression_after_click_ms;
-        const index = app.hovered_index orelse return;
-        if (index >= app.display_entries.items.len) return;
-        const entry = app.display_entries.items[index];
-        const open_app = if (index < app.display_open_apps.items.len)
-            app.display_open_apps.items[index]
-        else
-            dock_ipc.OpenAppInfo{};
-        launcher_state.recordRecentId(app.allocator, entry.id) catch |err| {
-            log.err("failed to persist dock recent app: {}", .{err});
-        };
-
-        if (open_app.id_len > 0) {
-            const socket_path = app.ipc_socket_path orelse return;
-            app.last_runtime_sync_ms = 0;
-            if (dock_ipc.focusApp(app.allocator, socket_path, open_app.idText()) catch false) {
-                return;
-            }
+        const click_hit = render.hitTest(
+            app.surface.width,
+            app.surface.height,
+            app.pointer_x,
+            app.pointer_y,
+            app.display_entries.items,
+            app.dock_config.style,
+            app.slide_offset_y,
+        );
+        if (button == 0x111 and state == c.WL_POINTER_BUTTON_STATE_PRESSED) {
+            app.handleSecondaryPress(click_hit);
+            return;
         }
 
-        app.spawnCommand(entry.command) catch |err| {
-            log.err("failed to launch dock app: {}", .{err});
-        };
-        app.last_runtime_sync_ms = 0;
+        if (button != 0x110) return;
+        switch (state) {
+            c.WL_POINTER_BUTTON_STATE_PRESSED => app.handlePrimaryPress(click_hit),
+            c.WL_POINTER_BUTTON_STATE_RELEASED => app.handlePrimaryRelease(click_hit),
+            else => {},
+        }
     }
 
     fn handlePointerAxis(_: ?*anyopaque, _: ?*c.struct_wl_pointer, _: u32, _: u32, _: c.wl_fixed_t) callconv(.c) void {}
@@ -656,7 +762,7 @@ pub const App = struct {
         const rect = render.itemRect(
             self.surface.width,
             self.surface.height,
-            self.display_entries.items,
+            self.display_entries.items.len + 1,
             self.dock_config.style,
             self.slide_offset_y,
             hovered,
@@ -685,7 +791,7 @@ pub const App = struct {
         if (!self.surface.configured or self.surface.width == 0 or self.surface.height == 0) return;
         const socket_path = self.ipc_socket_path orelse return;
         const hidden_target = self.dock_config.style.hiddenOffset();
-        if (self.dock_config.auto_hide and !self.pointer_inside and self.hovered_index == null and !self.isAnimating() and @abs(self.slide_offset_y - hidden_target) <= 0.25) {
+        if (self.dock_config.auto_hide and !self.isAppGridOpen() and !self.pointer_inside and self.hovered_index == null and !self.all_apps_hovered and !self.isAnimating() and @abs(self.slide_offset_y - hidden_target) <= 0.25) {
             try dock_ipc.updateGlassRegion(self.allocator, socket_path, 0, 0, 0, 0, @intCast(self.surface.height));
             self.last_glass_box = null;
             self.last_glass_surface_height = @intCast(self.surface.height);
@@ -694,7 +800,7 @@ pub const App = struct {
         const rect = render.containerRect(
             self.surface.width,
             self.surface.height,
-            self.display_entries.items,
+            self.display_entries.items.len + 1,
             self.dock_config.style,
             self.slide_offset_y,
         );
@@ -725,7 +831,9 @@ pub const App = struct {
 
     fn targetSlideOffset(self: *const App) f64 {
         if (!self.dock_config.auto_hide) return 0;
-        if (self.pointer_inside or self.hovered_index != null) return 0;
+        if (self.isAppGridOpen()) return 0;
+        if (self.context_menu.open or self.drag.active) return 0;
+        if (self.pointer_inside or self.hovered_index != null or self.all_apps_hovered) return 0;
         const now_ms = std.time.milliTimestamp();
         if (self.hide_deadline_ms != 0 and now_ms < self.hide_deadline_ms) {
             return 0;
@@ -760,5 +868,250 @@ pub const App = struct {
         self.slide_offset_y += step;
         self.surface.dirty = true;
         self.syncGlassRegion() catch {};
+    }
+
+    fn handleSecondaryPress(self: *App, hit: render.HitTarget) void {
+        self.hidePreview();
+        self.drag.clear();
+        self.pressed_hit = .none;
+
+        if (self.context_menu.open) {
+            const action = render.contextMenuActionAt(
+                self.surface.width,
+                self.surface.height,
+                self.dock_config.style,
+                self.slide_offset_y,
+                self.display_entries.items,
+                .{ .item_index = self.context_menu.item_index, .pinned = self.context_menu.pinned },
+                self.pointer_x,
+                self.pointer_y,
+            );
+            if (action == .toggle_pin) {
+                self.togglePinForIndex(self.context_menu.item_index) catch {};
+                self.context_menu.open = false;
+                self.applyLayerPreferences() catch {};
+                self.surface.dirty = true;
+                return;
+            }
+        }
+
+        switch (hit) {
+            .app => |index| {
+                if (index >= self.display_entries.items.len) return;
+                self.context_menu = .{
+                    .open = true,
+                    .item_index = index,
+                    .pinned = index < self.favorites.items.len,
+                };
+                self.applyLayerPreferences() catch {};
+                self.surface.dirty = true;
+            },
+            else => {
+                self.context_menu.open = false;
+                self.applyLayerPreferences() catch {};
+                self.surface.dirty = true;
+            },
+        }
+    }
+
+    fn handlePrimaryPress(self: *App, hit: render.HitTarget) void {
+        self.hidePreview();
+        self.preview_suppressed_until_ms = std.time.milliTimestamp() + preview_suppression_after_click_ms;
+
+        if (self.context_menu.open) {
+            const action = render.contextMenuActionAt(
+                self.surface.width,
+                self.surface.height,
+                self.dock_config.style,
+                self.slide_offset_y,
+                self.display_entries.items,
+                .{ .item_index = self.context_menu.item_index, .pinned = self.context_menu.pinned },
+                self.pointer_x,
+                self.pointer_y,
+            );
+            if (action == .toggle_pin) {
+                self.togglePinForIndex(self.context_menu.item_index) catch {};
+                self.context_menu.open = false;
+                self.applyLayerPreferences() catch {};
+                self.surface.dirty = true;
+                return;
+            }
+            self.context_menu.open = false;
+            self.applyLayerPreferences() catch {};
+            self.surface.dirty = true;
+        }
+
+        self.pressed_hit = hit;
+        switch (hit) {
+            .app => |index| {
+                if (index < self.favorites.items.len) {
+                    self.drag = .{
+                        .pressed_index = index,
+                        .source_index = index,
+                        .target_index = index,
+                        .press_x = self.pointer_x,
+                        .press_y = self.pointer_y,
+                    };
+                }
+            },
+            else => self.drag.clear(),
+        }
+    }
+
+    fn handlePrimaryRelease(self: *App, hit: render.HitTarget) void {
+        defer {
+            self.pressed_hit = .none;
+            self.drag.clear();
+        }
+
+        if (self.drag.active) {
+            self.finishDragReorder() catch {};
+            return;
+        }
+
+        if (!sameHitTarget(self.pressed_hit, hit)) return;
+
+        switch (hit) {
+            .all_apps => self.toggleAppGrid(),
+            .app => |index| self.activateEntry(index),
+            .none => {},
+        }
+    }
+
+    fn activateEntry(self: *App, index: usize) void {
+        if (index >= self.display_entries.items.len) return;
+        const entry = self.display_entries.items[index];
+        const open_app = if (index < self.display_open_apps.items.len)
+            self.display_open_apps.items[index]
+        else
+            dock_ipc.OpenAppInfo{};
+
+        launcher_state.recordRecentId(self.allocator, entry.id) catch |err| {
+            log.err("failed to persist dock recent app: {}", .{err});
+        };
+
+        if (open_app.id_len > 0) {
+            const socket_path = self.ipc_socket_path orelse return;
+            self.last_runtime_sync_ms = 0;
+            if (dock_ipc.focusApp(self.allocator, socket_path, open_app.idText()) catch false) return;
+        }
+
+        self.spawnCommand(entry.command) catch |err| {
+            log.err("failed to launch dock app: {}", .{err});
+        };
+        self.last_runtime_sync_ms = 0;
+    }
+
+    fn toggleAppGrid(self: *App) void {
+        self.refreshOpenApps() catch {};
+        const socket_path = self.ipc_socket_path;
+        if (self.findOpenAppById("axia-app-grid")) |open_app| {
+            if (socket_path) |path| {
+                const handled = if (open_app.focused)
+                    (dock_ipc.closeApp(self.allocator, path, "axia-app-grid") catch false)
+                else
+                    (dock_ipc.focusApp(self.allocator, path, "axia-app-grid") catch false);
+                if (handled) {
+                    self.last_runtime_sync_ms = 0;
+                    return;
+                }
+            }
+        }
+        self.spawnSiblingBinary("axia-app-grid") catch |err| {
+            log.err("failed to launch app grid: {}", .{err});
+        };
+    }
+
+    fn togglePinForIndex(self: *App, index: usize) !void {
+        if (index >= self.display_entries.items.len) return;
+        const entry = self.display_entries.items[index];
+        const pinned = index < self.favorites.items.len;
+        try launcher_state.setFavoriteEnabled(self.allocator, entry.id, !pinned);
+        try self.applyFavoriteToggleInMemory(entry, !pinned);
+        self.updateHover();
+    }
+
+    fn updateDragState(self: *App) void {
+        if (self.drag.pressed_index == null or self.drag.active) {
+            if (self.drag.active) {
+                const next_target = self.favoriteDropIndexForPointer();
+                if (next_target != self.drag.target_index) {
+                    self.drag.target_index = next_target;
+                    self.surface.dirty = true;
+                }
+            }
+            return;
+        }
+
+        const dx = self.pointer_x - self.drag.press_x;
+        const dy = self.pointer_y - self.drag.press_y;
+        if ((dx * dx + dy * dy) < drag_start_threshold * drag_start_threshold) return;
+
+        self.drag.active = true;
+        self.drag.target_index = self.favoriteDropIndexForPointer();
+        self.context_menu.open = false;
+        self.applyLayerPreferences() catch {};
+        self.hovered_index = self.drag.source_index;
+        self.surface.dirty = true;
+    }
+
+    fn favoriteDropIndexForPointer(self: *const App) usize {
+        const favorite_count = self.favorites.items.len;
+        if (favorite_count <= 1) return 0;
+
+        var nearest_index: usize = 0;
+        var nearest_distance = std.math.inf(f64);
+        for (0..favorite_count) |index| {
+            const rect = render.itemRect(
+                self.surface.width,
+                self.surface.height,
+                self.display_entries.items.len + 1,
+                self.dock_config.style,
+                self.slide_offset_y,
+                index,
+            );
+            const center = rect.x + rect.width / 2.0;
+            const distance = @abs(self.pointer_x - center);
+            if (distance < nearest_distance) {
+                nearest_distance = distance;
+                nearest_index = index;
+            }
+        }
+        return nearest_index;
+    }
+
+    fn finishDragReorder(self: *App) !void {
+        if (!self.drag.active) return;
+        if (self.drag.source_index >= self.favorites.items.len or self.drag.target_index >= self.favorites.items.len) return;
+        if (self.drag.source_index == self.drag.target_index) {
+            self.surface.dirty = true;
+            return;
+        }
+
+        const moved = self.favorites.items[self.drag.source_index];
+        const moved_favorite = self.favorites.orderedRemove(self.drag.source_index);
+        try self.favorites.insert(self.allocator, self.drag.target_index, moved_favorite);
+
+        const moved_display = self.display_entries.orderedRemove(self.drag.source_index);
+        try self.display_entries.insert(self.allocator, self.drag.target_index, moved_display);
+
+        if (self.drag.source_index < self.display_open_apps.items.len) {
+            const moved_open = self.display_open_apps.orderedRemove(self.drag.source_index);
+            try self.display_open_apps.insert(self.allocator, self.drag.target_index, moved_open);
+        }
+        try self.icons.syncEntries(self.display_entries.items);
+        _ = try launcher_state.moveFavoriteId(self.allocator, moved.id, self.drag.target_index);
+        self.surface.dirty = true;
+    }
+
+    fn sameHitTarget(a: render.HitTarget, b: render.HitTarget) bool {
+        return switch (a) {
+            .none => b == .none,
+            .all_apps => b == .all_apps,
+            .app => |lhs| switch (b) {
+                .app => |rhs| lhs == rhs,
+                else => false,
+            },
+        };
     }
 };

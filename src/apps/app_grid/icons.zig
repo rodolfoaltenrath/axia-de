@@ -1,5 +1,5 @@
 const std = @import("std");
-const c = @import("wl.zig").c;
+const c = @import("client_wl").c;
 const runtime_catalog = @import("runtime_catalog");
 
 const icon_sizes = [_][]const u8{ "256x256", "128x128", "96x96", "64x64", "48x48", "32x32", "24x24", "22x22", "16x16" };
@@ -10,66 +10,44 @@ const pixmap_roots = [_][]const u8{ ".local/share/pixmaps", "/usr/local/share/pi
 
 pub const IconCache = struct {
     allocator: std.mem.Allocator,
-    items: std.ArrayListUnmanaged(Item) = .empty,
+    surfaces: std.ArrayListUnmanaged(?*c.cairo_surface_t) = .empty,
 
-    const Item = struct {
-        id: []const u8,
-        surface: ?*c.cairo_surface_t,
-    };
+    pub fn initEmpty(allocator: std.mem.Allocator, count: usize) !IconCache {
+        var cache = IconCache{ .allocator = allocator };
+        errdefer cache.deinit();
+        try cache.surfaces.resize(allocator, count);
+        @memset(cache.surfaces.items, null);
+        return cache;
+    }
 
     pub fn init(allocator: std.mem.Allocator, entries: []const runtime_catalog.AppEntry) !IconCache {
         var cache = IconCache{ .allocator = allocator };
         errdefer cache.deinit();
-        try cache.syncEntries(entries);
+
+        try cache.surfaces.ensureTotalCapacity(allocator, entries.len);
+        for (entries) |entry| {
+            cache.surfaces.appendAssumeCapacity(try loadSurfaceForEntry(allocator, entry));
+        }
+
         return cache;
     }
 
     pub fn deinit(self: *IconCache) void {
-        for (self.items.items) |item| {
-            if (item.surface) |loaded| c.cairo_surface_destroy(loaded);
+        for (self.surfaces.items) |surface| {
+            if (surface) |loaded| c.cairo_surface_destroy(loaded);
         }
-        self.items.deinit(self.allocator);
+        self.surfaces.deinit(self.allocator);
     }
 
     pub fn surfaceFor(self: *const IconCache, index: usize) ?*c.cairo_surface_t {
-        if (index >= self.items.items.len) return null;
-        return self.items.items[index].surface;
+        if (index >= self.surfaces.items.len) return null;
+        return self.surfaces.items[index];
     }
 
-    pub fn syncEntries(self: *IconCache, entries: []const runtime_catalog.AppEntry) !void {
-        var next: std.ArrayListUnmanaged(Item) = .empty;
-        errdefer {
-            for (next.items) |item| {
-                if (item.surface) |loaded| c.cairo_surface_destroy(loaded);
-            }
-            next.deinit(self.allocator);
-        }
-
-        try next.ensureTotalCapacity(self.allocator, entries.len);
-        for (entries) |entry| {
-            if (self.takeItem(entry.id)) |existing| {
-                next.appendAssumeCapacity(existing);
-            } else {
-                next.appendAssumeCapacity(.{
-                    .id = entry.id,
-                    .surface = try loadSurfaceForEntry(self.allocator, entry),
-                });
-            }
-        }
-
-        for (self.items.items) |item| {
-            if (item.surface) |loaded| c.cairo_surface_destroy(loaded);
-        }
-        self.items.deinit(self.allocator);
-        self.items = next;
-    }
-
-    fn takeItem(self: *IconCache, id: []const u8) ?Item {
-        for (self.items.items, 0..) |item, index| {
-            if (!std.mem.eql(u8, item.id, id)) continue;
-            return self.items.orderedRemove(index);
-        }
-        return null;
+    pub fn ensureSurface(self: *IconCache, index: usize, entry: runtime_catalog.AppEntry) !void {
+        if (index >= self.surfaces.items.len) return;
+        if (self.surfaces.items[index] != null) return;
+        self.surfaces.items[index] = try loadSurfaceForEntry(self.allocator, entry);
     }
 };
 
@@ -205,30 +183,14 @@ fn executableToken(command: []const u8) []const u8 {
 }
 
 fn iconAliases(entry: runtime_catalog.AppEntry) []const []const u8 {
-    if (std.ascii.eqlIgnoreCase(entry.label, "Terminal")) {
-        return &.{ "Alacritty", "alacritty", "utilities-terminal" };
-    }
-    if (std.ascii.eqlIgnoreCase(entry.label, "Firefox")) {
-        return &.{ "firefox", "web-browser" };
-    }
-    if (std.ascii.eqlIgnoreCase(entry.label, "Arquivos")) {
-        return &.{ "folder", "folder-open" };
-    }
-    if (std.ascii.eqlIgnoreCase(entry.label, "VS Code")) {
-        return &.{ "visual-studio-code", "code" };
-    }
-    if (std.ascii.eqlIgnoreCase(entry.label, "Configurações")) {
-        return &.{ "preferences-system", "preferences-desktop" };
-    }
-    if (std.ascii.eqlIgnoreCase(entry.label, "Rede")) {
-        return &.{ "preferences-system-network", "network-workgroup" };
-    }
-    if (std.ascii.eqlIgnoreCase(entry.label, "Bluetooth")) {
-        return &.{ "bluetooth", "preferences-system-bluetooth" };
-    }
-    if (std.ascii.eqlIgnoreCase(entry.label, "Impressoras")) {
-        return &.{ "printer", "printer-network" };
-    }
+    if (std.ascii.eqlIgnoreCase(entry.label, "Terminal")) return &.{ "Alacritty", "alacritty", "utilities-terminal" };
+    if (std.ascii.eqlIgnoreCase(entry.label, "Firefox")) return &.{ "firefox", "web-browser" };
+    if (std.ascii.eqlIgnoreCase(entry.label, "Arquivos")) return &.{ "folder", "folder-open" };
+    if (std.ascii.eqlIgnoreCase(entry.label, "VS Code")) return &.{ "visual-studio-code", "code" };
+    if (std.ascii.eqlIgnoreCase(entry.label, "Configurações")) return &.{ "preferences-system", "preferences-desktop" };
+    if (std.ascii.eqlIgnoreCase(entry.label, "Rede")) return &.{ "preferences-system-network", "network-workgroup" };
+    if (std.ascii.eqlIgnoreCase(entry.label, "Bluetooth")) return &.{ "bluetooth", "preferences-system-bluetooth" };
+    if (std.ascii.eqlIgnoreCase(entry.label, "Impressoras")) return &.{ "printer", "printer-network" };
     return &.{};
 }
 

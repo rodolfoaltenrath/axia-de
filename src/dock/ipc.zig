@@ -32,6 +32,15 @@ pub fn focusApp(allocator: std.mem.Allocator, socket_path: []const u8, app_id: [
     return std.mem.startsWith(u8, std.mem.trim(u8, response, " \r\n\t"), "ok");
 }
 
+pub fn closeApp(allocator: std.mem.Allocator, socket_path: []const u8, app_id: []const u8) !bool {
+    const payload = try std.fmt.allocPrint(allocator, "app close {s}\n", .{app_id});
+    defer allocator.free(payload);
+
+    const response = try request(allocator, socket_path, payload);
+    defer allocator.free(response);
+    return std.mem.startsWith(u8, std.mem.trim(u8, response, " \r\n\t"), "ok");
+}
+
 pub fn showPreview(allocator: std.mem.Allocator, socket_path: []const u8, app_id: []const u8, anchor_x: i32) !void {
     const payload = try std.fmt.allocPrint(allocator, "preview show {s} {d}\n", .{ app_id, anchor_x });
     defer allocator.free(payload);

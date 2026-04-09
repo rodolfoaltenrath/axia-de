@@ -67,6 +67,38 @@ pub const State = struct {
         return true;
     }
 
+    pub fn setFavorite(self: *State, id: []const u8, enabled: bool) !void {
+        if (id.len == 0) return;
+
+        if (enabled) {
+            if (!self.isFavorite(id)) {
+                try self.favorite_ids.append(self.allocator, try self.allocator.dupe(u8, id));
+            }
+            return;
+        }
+
+        _ = removeId(&self.favorite_ids, self.allocator, id);
+    }
+
+    pub fn moveFavorite(self: *State, id: []const u8, target_index: usize) !bool {
+        if (id.len == 0) return false;
+
+        var source_index: ?usize = null;
+        for (self.favorite_ids.items, 0..) |item, index| {
+            if (std.mem.eql(u8, item, id)) {
+                source_index = index;
+                break;
+            }
+        }
+        const from = source_index orelse return false;
+        const bounded_target = @min(target_index, self.favorite_ids.items.len - 1);
+        if (from == bounded_target) return false;
+
+        const moved = self.favorite_ids.orderedRemove(from);
+        try self.favorite_ids.insert(self.allocator, bounded_target, moved);
+        return true;
+    }
+
     pub fn recordRecent(self: *State, id: []const u8) !void {
         if (id.len == 0) return;
 
@@ -144,6 +176,21 @@ pub fn recordRecentId(allocator: std.mem.Allocator, id: []const u8) !void {
     defer state.deinit();
     try state.recordRecent(id);
     try state.save();
+}
+
+pub fn setFavoriteEnabled(allocator: std.mem.Allocator, id: []const u8, enabled: bool) !void {
+    var state = try load(allocator);
+    defer state.deinit();
+    try state.setFavorite(id, enabled);
+    try state.save();
+}
+
+pub fn moveFavoriteId(allocator: std.mem.Allocator, id: []const u8, target_index: usize) !bool {
+    var state = try load(allocator);
+    defer state.deinit();
+    const changed = try state.moveFavorite(id, target_index);
+    if (changed) try state.save();
+    return changed;
 }
 
 pub fn load(allocator: std.mem.Allocator) !State {

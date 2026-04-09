@@ -1,4 +1,5 @@
 const std = @import("std");
+const notification_model = @import("notification_model");
 const toast_model = @import("toast_model");
 
 pub const WorkspaceState = struct {
@@ -51,6 +52,20 @@ pub fn getToasts(allocator: std.mem.Allocator, socket_path: []const u8) !toast_m
     return parseToastState(response);
 }
 
+pub fn getNotifications(allocator: std.mem.Allocator, socket_path: []const u8) !notification_model.State {
+    const response = try request(allocator, socket_path, "notification get\n");
+    defer allocator.free(response);
+    return parseNotificationState(response);
+}
+
+pub fn setDoNotDisturb(allocator: std.mem.Allocator, socket_path: []const u8, enabled: bool) !notification_model.State {
+    var command: [64]u8 = undefined;
+    const request_payload = try std.fmt.bufPrint(&command, "notification dnd {}\n", .{@intFromBool(enabled)});
+    const response = try request(allocator, socket_path, request_payload);
+    defer allocator.free(response);
+    return parseNotificationState(response);
+}
+
 fn request(allocator: std.mem.Allocator, socket_path: []const u8, payload: []const u8) ![]u8 {
     const address = try std.net.Address.initUnix(socket_path);
     const fd = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC, 0);
@@ -59,9 +74,17 @@ fn request(allocator: std.mem.Allocator, socket_path: []const u8, payload: []con
     try std.posix.connect(fd, &address.any, address.getOsSockLen());
     _ = try std.posix.write(fd, payload);
 
-    var buffer: [128]u8 = undefined;
-    const len = try std.posix.read(fd, &buffer);
-    return allocator.dupe(u8, buffer[0..len]);
+    var result = try std.array_list.Managed(u8).initCapacity(allocator, 512);
+    errdefer result.deinit();
+
+    var buffer: [512]u8 = undefined;
+    while (true) {
+        const len = try std.posix.read(fd, &buffer);
+        if (len == 0) break;
+        try result.appendSlice(buffer[0..len]);
+        if (len < buffer.len) break;
+    }
+    return result.toOwnedSlice();
 }
 
 fn parseWorkspaceState(response: []const u8) !WorkspaceState {
@@ -143,6 +166,44 @@ fn parseToastState(response: []const u8) !toast_model.State {
         state.items[index].id = try std.fmt.parseUnsigned(u32, raw_id, 10);
         state.items[index].level = toast_model.parseLevel(raw_level) orelse .info;
         toast_model.copyMessage(&state.items[index], message);
+        index += 1;
+    }
+    state.count = @min(state.count, index);
+    return state;
+}
+
+fn parseNotificationState(response: []const u8) !notification_model.State {
+    var state = notification_model.State{};
+    var lines = std.mem.tokenizeScalar(u8, std.mem.trim(u8, response, " \r\n\t"), '\n');
+
+    const header = lines.next() orelse return error.InvalidResponse;
+    {
+        var tokens = std.mem.tokenizeAny(u8, header, " ");
+        const status = tokens.next() orelse return error.InvalidResponse;
+        const kind = tokens.next() orelse return error.InvalidResponse;
+        const raw_count = tokens.next() orelse return error.InvalidResponse;
+        const raw_dnd = tokens.next() orelse return error.InvalidResponse;
+        if (!std.mem.eql(u8, status, "ok") or !std.mem.eql(u8, kind, "notifications")) return error.InvalidResponse;
+        state.count = @min(try std.fmt.parseUnsigned(usize, raw_count, 10), state.items.len);
+        state.do_not_disturb = (try std.fmt.parseUnsigned(u8, raw_dnd, 10)) != 0;
+    }
+
+    var index: usize = 0;
+    while (lines.next()) |line| {
+        if (!std.mem.startsWith(u8, line, "notification ")) continue;
+        if (index >= state.items.len) break;
+
+        var tokens = std.mem.tokenizeAny(u8, line, " ");
+        _ = tokens.next();
+        const raw_id = tokens.next() orelse continue;
+        const raw_created_ms = tokens.next() orelse continue;
+        const raw_level = tokens.next() orelse continue;
+        const message = tokens.rest();
+
+        state.items[index].id = try std.fmt.parseUnsigned(u32, raw_id, 10);
+        state.items[index].created_ms = try std.fmt.parseInt(i64, raw_created_ms, 10);
+        state.items[index].level = notification_model.parseLevel(raw_level) orelse .info;
+        notification_model.copyMessage(&state.items[index], message);
         index += 1;
     }
     state.count = @min(state.count, index);

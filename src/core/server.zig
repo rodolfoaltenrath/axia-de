@@ -241,6 +241,7 @@ pub const Server = struct {
             ipcGetRuntimeState,
             ipcSetWorkspaceWrap,
             ipcFocusApp,
+            ipcCloseApp,
             ipcShowPreview,
             ipcHidePreview,
             ipcUpdateDockGlass,
@@ -543,6 +544,12 @@ pub const Server = struct {
         return server.focusApp(app_id);
     }
 
+    fn ipcCloseApp(ctx: ?*anyopaque, app_id: []const u8) bool {
+        const raw_server = ctx orelse return false;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        return server.closeApp(app_id);
+    }
+
     fn ipcShowPreview(ctx: ?*anyopaque, app_id: []const u8, anchor_x: i32) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
@@ -626,6 +633,10 @@ pub const Server = struct {
 
     fn focusApp(self: *Server, app_id: []const u8) bool {
         return self.xdg.focusAppById(app_id);
+    }
+
+    fn closeApp(self: *Server, app_id: []const u8) bool {
+        return self.xdg.closeAppById(app_id);
     }
 
     fn setWorkspaceWrap(self: *Server, enabled: bool) !void {

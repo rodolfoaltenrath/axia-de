@@ -5,9 +5,9 @@ const prefs = @import("axia_prefs");
 const settings_model = @import("settings_model");
 const file_picker = @import("settings_picker");
 const ipc = @import("ipc.zig");
+const notification_client = @import("notification_client");
+const notification_model = @import("notification_model");
 const render = @import("render.zig");
-const toast_client = @import("toast_client");
-const toast_model = @import("toast_model");
 
 const log = std.log.scoped(.axia_settings_app);
 
@@ -173,14 +173,15 @@ pub const App = struct {
         if (self.ipc_socket_path) |socket| {
             ipc.setWallpaper(self.allocator, socket, path) catch |err| {
                 log.err("failed to send wallpaper over ipc: {}", .{err});
-                self.showToast(.failure, "Nao foi possivel alterar o wallpaper.");
+                self.showNotification(.failure, "Nao foi possivel alterar o wallpaper.");
+                return err;
             };
         }
 
         if (self.current_wallpaper_path) |existing| self.allocator.free(existing);
         self.current_wallpaper_path = try self.allocator.dupe(u8, path);
         try self.savePreferences();
-        self.showToast(.success, "Wallpaper atualizado.");
+        self.showNotification(.success, "Wallpaper atualizado.");
         self.dirty = true;
     }
 
@@ -237,13 +238,12 @@ pub const App = struct {
                 const preset = settings_model.wallpaper_presets[index];
                 self.applyWallpaper(preset.path) catch |err| {
                     log.err("failed to apply preset wallpaper: {}", .{err});
-                    self.showToast(.failure, "Nao foi possivel aplicar o wallpaper.");
                 };
             },
             .browser_manual => {
                 self.openWallpaperPicker() catch |err| {
                     log.err("failed to open wallpaper picker: {}", .{err});
-                    self.showToast(.failure, "Nao foi possivel abrir o seletor de imagem.");
+                    self.showNotification(.failure, "Nao foi possivel abrir o seletor de imagem.");
                 };
             },
             .accent_preset => |preset| {
@@ -302,10 +302,13 @@ pub const App = struct {
                 if (self.ipc_socket_path) |socket| {
                     ipc.setWorkspaceWrap(self.allocator, socket, self.preferences.workspace_wrap) catch |err| {
                         log.err("failed to update workspace wrap over ipc: {}", .{err});
-                        self.showToast(.failure, "Nao foi possivel atualizar as areas de trabalho.");
+                        self.showNotification(.failure, "Nao foi possivel atualizar as areas de trabalho.");
+                        self.refreshRuntimeState();
+                        self.dirty = true;
+                        return;
                     };
                 }
-                self.showToast(.success, "Preferencia de areas de trabalho atualizada.");
+                self.showNotification(.success, "Preferencia de areas de trabalho atualizada.");
                 self.refreshRuntimeState();
             },
             .startup_workspace => |index| {
@@ -316,10 +319,13 @@ pub const App = struct {
                 if (self.ipc_socket_path) |socket| {
                     ipc.activateWorkspace(self.allocator, socket, index) catch |err| {
                         log.err("failed to activate workspace over ipc: {}", .{err});
-                        self.showToast(.failure, "Nao foi possivel mudar de area de trabalho.");
+                        self.showNotification(.failure, "Nao foi possivel mudar de area de trabalho.");
+                        self.refreshRuntimeState();
+                        self.dirty = true;
+                        return;
                     };
                 }
-                self.showToast(.info, "Area de trabalho alterada.");
+                self.showNotification(.info, "Area de trabalho alterada.");
                 self.refreshRuntimeState();
             },
             .scroll_thumb => {
@@ -368,9 +374,9 @@ pub const App = struct {
         try stored.save();
     }
 
-    fn showToast(self: *App, level: toast_model.Level, message: []const u8) void {
+    fn showNotification(self: *App, level: notification_model.Level, message: []const u8) void {
         const socket_path = self.ipc_socket_path orelse return;
-        toast_client.show(self.allocator, socket_path, level, message) catch {};
+        notification_client.push(self.allocator, socket_path, level, message) catch {};
     }
 
     fn refreshRuntimeState(self: *App) void {

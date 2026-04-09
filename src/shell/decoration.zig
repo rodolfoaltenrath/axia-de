@@ -80,7 +80,7 @@ const Decoration = struct {
     request_mode: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
     commit: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
     destroy: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
-    mode_applied: bool = false,
+    applied_mode: ?u32 = null,
 
     fn detach(self: *Decoration) void {
         c.wl_list_remove(&self.request_mode.link);
@@ -106,13 +106,18 @@ const Decoration = struct {
     }
 
     fn applyPreferredMode(self: *Decoration) void {
-        if (self.mode_applied) return;
         if (!self.decoration.*.toplevel.*.base.*.initialized) return;
 
-        _ = c.wlr_xdg_toplevel_decoration_v1_set_mode(
-            self.decoration,
-            c.WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE,
-        );
-        self.mode_applied = true;
+        const toplevel = self.decoration.*.toplevel;
+        const app_id = if (toplevel.*.app_id != null) std.mem.span(toplevel.*.app_id) else "";
+        const preferred_mode: u32 = if (app_id.len > 0 and std.mem.startsWith(u8, app_id, "axia-"))
+            c.WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE
+        else
+            c.WLR_XDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE;
+
+        if (self.applied_mode != null and self.applied_mode.? == preferred_mode) return;
+
+        _ = c.wlr_xdg_toplevel_decoration_v1_set_mode(self.decoration, preferred_mode);
+        self.applied_mode = preferred_mode;
     }
 };
