@@ -3,6 +3,9 @@
 ## Objetivo
 Este roadmap define o que precisa estar pronto para iniciar um `teste alpha` real do Axia-DE.
 
+Para um backlog mais detalhado e orientado a execução, veja:
+- [docs/office-readiness-tasks.md](office-readiness-tasks.md)
+
 O foco aqui nao e "ter todas as ideias do produto prontas".
 O foco e chegar num ponto em que:
 - a sessao inicializa de forma confiavel
@@ -241,3 +244,13 @@ Itens importantes, mas que podem esperar:
 - glass em mais superficies
 - onboarding/welcome app
 - empacotamento e distribuicao mais refinados
+
+---
+
+## Backlog Detalhado
+
+O roadmap acima continua sendo a visao macro.
+
+Para implementar por tasks menores, com prioridade, criterio de pronto e ordem sugerida, use:
+
+- [docs/office-readiness-tasks.md](office-readiness-tasks.md)

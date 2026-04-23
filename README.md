@@ -180,6 +180,7 @@ Em outras palavras: já é um projeto usável para desenvolvimento e experimenta
 O roadmap vivo do projeto está em:
 
 - [docs/roadmap.md](docs/roadmap.md)
+- [docs/office-readiness-tasks.md](docs/office-readiness-tasks.md)
 
 Documentos técnicos relacionados:
 
@@ -201,4 +202,3 @@ O objetivo do Axia-DE não é apenas “subir um compositor”, mas construir um
 - boa parte do shell conversa por IPC com o core da sessão
 - o projeto prioriza recursos reais do desktop antes de polimento absoluto
 - mudanças visuais e comportamentais ainda acontecem com bastante frequência
-
