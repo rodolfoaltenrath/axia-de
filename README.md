@@ -106,7 +106,7 @@ Pacotes úteis para os recursos atuais do shell:
 sudo pacman -S --needed \
   networkmanager bluez bluez-utils rfkill \
   pipewire wireplumber \
-  ghostty firefox code
+  ghostty firefox code grim slurp
 ```
 
 Observação:
@@ -115,6 +115,8 @@ Observação:
 - rede usa `nmcli`
 - Bluetooth usa `bluetoothctl` e `rfkill`
 - ações de sessão usam `loginctl` e `systemctl`
+- screenshot usa `grim`
+- selecao de area usa `slurp`
 
 ## Compilação
 
@@ -162,6 +164,13 @@ AXIA_WALLPAPER=/caminho/para/wallpaper.png zig build run
 - `Super+Shift+1..4`: move a janela focada para outra workspace
 - `Super+Tab`: cicla entre workspaces
 - `Super+Espaço`: abre o launcher
+- `Alt+Espaço`: abre o launcher
+- `Super+A`: abre ou fecha a grade de aplicativos
+- `Super+,`: abre Configurações
+- `Super+L`: bloqueia a sessão
+- `Print`: salva screenshot em `~/Pictures/Screenshots`, `~/Imagens/Screenshots` ou `~/Screenshots`
+- `Shift+Print`: salva screenshot da janela focada
+- `Super+Print`: abre seleção de área para screenshot
 
 ### Mouse
 

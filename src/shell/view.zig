@@ -275,6 +275,15 @@ pub const View = struct {
         return self.effectiveHeight() + if (self.compositorChromeVisible()) frame_margin_px * 2 + titlebar_height_px else 0;
     }
 
+    pub fn outerBox(self: *const View) c.struct_wlr_box {
+        return .{
+            .x = self.x,
+            .y = self.y,
+            .width = self.outerWidth(),
+            .height = self.outerHeight(),
+        };
+    }
+
     pub fn localCoords(self: *const View, lx: f64, ly: f64) struct { x: f64, y: f64 } {
         return .{
             .x = lx - @as(f64, @floatFromInt(self.x)),

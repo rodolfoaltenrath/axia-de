@@ -138,6 +138,14 @@ pub const IpcServer = struct {
         return self.socket_path orelse "";
     }
 
+    pub fn showToast(self: *IpcServer, level: toast_model.Level, message: []const u8) void {
+        self.pushToast(level, message);
+    }
+
+    pub fn showNotification(self: *IpcServer, level: notification_model.Level, message: []const u8) void {
+        self.pushNotification(level, message);
+    }
+
     fn handleReadable(fd: c_int, _: u32, data: ?*anyopaque) callconv(.c) c_int {
         const raw_server = data orelse return 0;
         const server: *IpcServer = @ptrCast(@alignCast(raw_server));
