@@ -198,6 +198,12 @@ pub const XdgManager = struct {
         return false;
     }
 
+    pub fn isAppFocusedById(self: *const XdgManager, app_id: []const u8) bool {
+        if (app_id.len == 0) return false;
+        const view = self.focused_view orelse return false;
+        return view.mappedState() and std.mem.eql(u8, view.appId(), app_id);
+    }
+
     pub fn showAppPreview(self: *XdgManager, app_id: []const u8, anchor_x: i32) !void {
         const view = self.findPreviewView(app_id) orelse {
             self.hideAppPreview();

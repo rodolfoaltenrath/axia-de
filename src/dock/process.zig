@@ -79,6 +79,20 @@ pub const DockProcess = struct {
         log.info("dock spawned", .{});
     }
 
+    pub fn reapIfExited(self: *DockProcess) ?std.process.Child.Term {
+        const child = if (self.child) |*active|
+            active
+        else
+            return null;
+
+        const result = std.posix.waitpid(child.id, std.posix.W.NOHANG);
+        if (result.pid == 0) return null;
+
+        const term = termFromStatus(result.status);
+        self.child = null;
+        return term;
+    }
+
     pub fn deinit(self: *DockProcess) void {
         if (self.child) |*child| {
             _ = child.kill() catch {};
@@ -87,3 +101,14 @@ pub const DockProcess = struct {
         }
     }
 };
+
+fn termFromStatus(status: u32) std.process.Child.Term {
+    return if (std.posix.W.IFEXITED(status))
+        .{ .Exited = std.posix.W.EXITSTATUS(status) }
+    else if (std.posix.W.IFSIGNALED(status))
+        .{ .Signal = std.posix.W.TERMSIG(status) }
+    else if (std.posix.W.IFSTOPPED(status))
+        .{ .Stopped = std.posix.W.STOPSIG(status) }
+    else
+        .{ .Unknown = status };
+}

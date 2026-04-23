@@ -9,6 +9,7 @@ const LayerManager = @import("../layers/manager.zig").LayerManager;
 const PanelProcess = @import("../panel/process.zig").PanelProcess;
 const DockProcess = @import("../dock/process.zig").DockProcess;
 const LauncherProcess = @import("../apps/launcher/process.zig").LauncherProcess;
+const AppGridProcess = @import("../apps/app_grid/process.zig").AppGridProcess;
 const XdgManager = @import("../shell/xdg.zig").XdgManager;
 const DecorationManager = @import("../shell/decoration.zig").DecorationManager;
 const IpcServer = @import("../ipc/server.zig").IpcServer;
@@ -24,6 +25,7 @@ const SettingsPreferencesState = settings_model.PreferencesState;
 const Preferences = @import("../config/preferences.zig");
 
 const log = std.log.scoped(.axia);
+const shell_supervisor_interval_ms = 1000;
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
@@ -40,11 +42,15 @@ pub const Server = struct {
     outputs: std.ArrayListUnmanaged(*Output) = .empty,
     new_output: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
     listeners_ready: bool = false,
+    shell_supervisor_timer: ?*c.struct_wl_event_source = null,
     input: InputManager,
     layers: LayerManager,
     panel: PanelProcess,
     dock: DockProcess,
     launcher: LauncherProcess,
+    app_grid: AppGridProcess,
+    launcher_requested: bool = false,
+    app_grid_requested: bool = false,
     xdg: XdgManager,
     decorations: DecorationManager,
     ipc: IpcServer,
@@ -116,6 +122,7 @@ pub const Server = struct {
         const panel = PanelProcess.init(allocator);
         const dock = DockProcess.init(allocator);
         const launcher = LauncherProcess.init(allocator);
+        const app_grid = AppGridProcess.init(allocator);
 
         var xdg = try XdgManager.init(
             allocator,
@@ -210,6 +217,7 @@ pub const Server = struct {
             .panel = panel,
             .dock = dock,
             .launcher = launcher,
+            .app_grid = app_grid,
             .xdg = xdg,
             .decorations = decorations,
             .ipc = ipc,
@@ -238,6 +246,7 @@ pub const Server = struct {
             ipcMoveFocusedWorkspace,
             ipcSetWallpaper,
             ipcToggleLauncher,
+            ipcToggleAppGrid,
             ipcGetRuntimeState,
             ipcSetWorkspaceWrap,
             ipcFocusApp,
@@ -256,6 +265,10 @@ pub const Server = struct {
         if (self.listeners_ready) {
             c.wl_list_remove(&self.new_output.link);
         }
+        if (self.shell_supervisor_timer) |timer| {
+            _ = c.wl_event_source_remove(timer);
+            self.shell_supervisor_timer = null;
+        }
 
         for (self.outputs.items) |output| {
             output.detach();
@@ -270,6 +283,7 @@ pub const Server = struct {
         self.panel.deinit();
         self.dock.deinit();
         self.launcher.deinit();
+        self.app_grid.deinit();
         self.input.deinit();
         if (self.wallpaper) |wallpaper| wallpaper.deinit();
         self.desktop_menu.deinit();
@@ -294,8 +308,24 @@ pub const Server = struct {
 
         self.panel.spawn(self.socket_name, self.ipc.path());
         self.dock.spawn(self.socket_name, self.ipc.path());
+        try self.startShellSupervisor();
         log.info("Axia-DE core is running on WAYLAND_DISPLAY={s}", .{std.mem.span(self.socket_name)});
         c.wl_display_run(self.display);
+    }
+
+    fn startShellSupervisor(self: *Server) !void {
+        if (self.shell_supervisor_timer != null) return;
+
+        const timer = c.wl_event_loop_add_timer(self.event_loop, handleShellSupervisorTimer, self) orelse {
+            return error.ShellSupervisorTimerCreateFailed;
+        };
+        self.shell_supervisor_timer = timer;
+
+        if (c.wl_event_source_timer_update(timer, shell_supervisor_interval_ms) != 0) {
+            _ = c.wl_event_source_remove(timer);
+            self.shell_supervisor_timer = null;
+            return error.ShellSupervisorTimerStartFailed;
+        }
     }
 
     fn registerOutput(self: *Server, wlr_output: [*c]c.struct_wlr_output) !void {
@@ -399,6 +429,45 @@ pub const Server = struct {
         const server: *Server = @ptrCast(@alignCast(raw_server));
         server.xdg.setUsableArea(usable_area);
         server.syncGlassRegions();
+    }
+
+    fn handleShellSupervisorTimer(data: ?*anyopaque) callconv(.c) c_int {
+        const raw_server = data orelse return 0;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        server.superviseShellProcesses();
+
+        if (server.shell_supervisor_timer) |timer| {
+            _ = c.wl_event_source_timer_update(timer, shell_supervisor_interval_ms);
+        }
+        return 0;
+    }
+
+    fn superviseShellProcesses(self: *Server) void {
+        if (self.panel.reapIfExited()) |term| {
+            log.warn("panel exited unexpectedly ({s}), restarting", .{formatChildTerm(term)});
+        }
+        if (self.dock.reapIfExited()) |term| {
+            log.warn("dock exited unexpectedly ({s}), restarting", .{formatChildTerm(term)});
+        }
+        self.handleSpecialProcessExit(
+            &self.launcher,
+            &self.launcher_requested,
+            "launcher",
+        );
+        self.handleSpecialProcessExit(
+            &self.app_grid,
+            &self.app_grid_requested,
+            "app grid",
+        );
+
+        self.panel.spawn(self.socket_name, self.ipc.path());
+        self.dock.spawn(self.socket_name, self.ipc.path());
+        if (self.launcher_requested and self.launcher.child == null) {
+            self.launcher.spawn(self.socket_name, self.ipc.path());
+        }
+        if (self.app_grid_requested and self.app_grid.child == null) {
+            self.app_grid.spawn(self.socket_name, self.ipc.path());
+        }
     }
 
     fn syncGlassRegions(self: *Server) void {
@@ -524,6 +593,12 @@ pub const Server = struct {
         server.toggleLauncher();
     }
 
+    fn ipcToggleAppGrid(ctx: ?*anyopaque) void {
+        const raw_server = ctx orelse return;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        server.toggleAppGrid();
+    }
+
     fn ipcGetRuntimeState(ctx: ?*anyopaque) SettingsRuntimeState {
         const raw_server = ctx orelse return .{};
         const server: *Server = @ptrCast(@alignCast(raw_server));
@@ -605,8 +680,62 @@ pub const Server = struct {
     }
 
     fn toggleLauncher(self: *Server) void {
-        if (self.xdg.dismissLauncher()) return;
+        if (self.xdg.dismissLauncher()) {
+            self.launcher_requested = false;
+            return;
+        }
+        self.launcher_requested = true;
         self.launcher.spawn(self.socket_name, self.ipc.path());
+    }
+
+    fn toggleAppGrid(self: *Server) void {
+        const app_id = "axia-app-grid";
+        if (self.xdg.isAppFocusedById(app_id)) {
+            self.app_grid_requested = false;
+            _ = self.xdg.closeAppById(app_id);
+            return;
+        }
+        if (self.xdg.focusAppById(app_id)) {
+            self.app_grid_requested = true;
+            return;
+        }
+        self.app_grid_requested = true;
+        self.app_grid.spawn(self.socket_name, self.ipc.path());
+    }
+
+    fn handleSpecialProcessExit(
+        self: *Server,
+        process: anytype,
+        requested_flag: *bool,
+        label: []const u8,
+    ) void {
+        const term = process.reapIfExited() orelse return;
+        if (!requested_flag.*) return;
+
+        switch (term) {
+            .Exited => |code| {
+                if (code == 0) {
+                    requested_flag.* = false;
+                    return;
+                }
+                log.warn("{s} exited with code {d}, restarting", .{ label, code });
+            },
+            .Signal => |signal| {
+                log.warn("{s} exited via signal {d}, restarting", .{ label, signal });
+            },
+            .Stopped => |signal| {
+                log.warn("{s} stopped via signal {d}, restarting", .{ label, signal });
+            },
+            .Unknown => |status| {
+                log.warn("{s} exited with unknown status {d}, restarting", .{ label, status });
+            },
+        }
+
+        if (std.mem.eql(u8, label, "launcher")) {
+            self.launcher.spawn(self.socket_name, self.ipc.path());
+        } else if (std.mem.eql(u8, label, "app grid")) {
+            self.app_grid.spawn(self.socket_name, self.ipc.path());
+        }
     }
 
     fn runtimeStateSnapshot(self: *const Server) SettingsRuntimeState {
@@ -757,6 +886,15 @@ pub const Server = struct {
             .bluetooth => "bluetooth",
             .printers => "printers",
             .about => "about",
+        };
+    }
+
+    fn formatChildTerm(term: std.process.Child.Term) []const u8 {
+        return switch (term) {
+            .Exited => "exit",
+            .Signal => "signal",
+            .Stopped => "stopped",
+            .Unknown => "unknown",
         };
     }
 

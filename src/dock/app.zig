@@ -1003,20 +1003,19 @@ pub const App = struct {
     }
 
     fn toggleAppGrid(self: *App) void {
-        self.refreshOpenApps() catch {};
         const socket_path = self.ipc_socket_path;
-        if (self.findOpenAppById("axia-app-grid")) |open_app| {
-            if (socket_path) |path| {
-                const handled = if (open_app.focused)
-                    (dock_ipc.closeApp(self.allocator, path, "axia-app-grid") catch false)
-                else
-                    (dock_ipc.focusApp(self.allocator, path, "axia-app-grid") catch false);
-                if (handled) {
-                    self.last_runtime_sync_ms = 0;
-                    return;
-                }
-            }
+        if (socket_path) |path| {
+            dock_ipc.toggleAppGrid(self.allocator, path) catch |err| {
+                log.err("failed to toggle app grid via ipc: {}", .{err});
+                return;
+            };
+            self.last_runtime_sync_ms = 0;
+            return;
         }
+
+        self.refreshOpenApps() catch {};
+        if (self.findOpenAppById("axia-app-grid") != null) return;
+
         self.spawnSiblingBinary("axia-app-grid") catch |err| {
             log.err("failed to launch app grid: {}", .{err});
         };

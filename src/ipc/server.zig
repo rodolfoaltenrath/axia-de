@@ -28,6 +28,7 @@ pub const ActivateWorkspaceCallback = *const fn (?*anyopaque, usize) void;
 pub const MoveFocusedWorkspaceCallback = *const fn (?*anyopaque, usize) void;
 pub const SetWallpaperCallback = *const fn (?*anyopaque, []const u8) void;
 pub const ToggleLauncherCallback = *const fn (?*anyopaque) void;
+pub const ToggleAppGridCallback = *const fn (?*anyopaque) void;
 pub const GetRuntimeStateCallback = *const fn (?*anyopaque) settings_model.RuntimeState;
 pub const SetWorkspaceWrapCallback = *const fn (?*anyopaque, bool) void;
 pub const FocusAppCallback = *const fn (?*anyopaque, []const u8) bool;
@@ -52,6 +53,7 @@ pub const IpcServer = struct {
     move_focused_workspace_cb: ?MoveFocusedWorkspaceCallback = null,
     set_wallpaper_cb: ?SetWallpaperCallback = null,
     toggle_launcher_cb: ?ToggleLauncherCallback = null,
+    toggle_app_grid_cb: ?ToggleAppGridCallback = null,
     get_runtime_state_cb: ?GetRuntimeStateCallback = null,
     set_workspace_wrap_cb: ?SetWorkspaceWrapCallback = null,
     focus_app_cb: ?FocusAppCallback = null,
@@ -96,6 +98,7 @@ pub const IpcServer = struct {
         move_focused_workspace_cb: MoveFocusedWorkspaceCallback,
         set_wallpaper_cb: SetWallpaperCallback,
         toggle_launcher_cb: ToggleLauncherCallback,
+        toggle_app_grid_cb: ToggleAppGridCallback,
         get_runtime_state_cb: GetRuntimeStateCallback,
         set_workspace_wrap_cb: SetWorkspaceWrapCallback,
         focus_app_cb: FocusAppCallback,
@@ -110,6 +113,7 @@ pub const IpcServer = struct {
         self.move_focused_workspace_cb = move_focused_workspace_cb;
         self.set_wallpaper_cb = set_wallpaper_cb;
         self.toggle_launcher_cb = toggle_launcher_cb;
+        self.toggle_app_grid_cb = toggle_app_grid_cb;
         self.get_runtime_state_cb = get_runtime_state_cb;
         self.set_workspace_wrap_cb = set_workspace_wrap_cb;
         self.focus_app_cb = focus_app_cb;
@@ -203,6 +207,14 @@ pub const IpcServer = struct {
 
         if (std.mem.eql(u8, request, "launcher toggle")) {
             if (self.toggle_launcher_cb) |callback| {
+                callback(self.ctx);
+            }
+            _ = std.posix.write(client_fd, "ok\n") catch {};
+            return;
+        }
+
+        if (std.mem.eql(u8, request, "app-grid toggle")) {
+            if (self.toggle_app_grid_cb) |callback| {
                 callback(self.ctx);
             }
             _ = std.posix.write(client_fd, "ok\n") catch {};

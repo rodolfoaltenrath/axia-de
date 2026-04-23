@@ -56,6 +56,12 @@ pub fn hidePreview(allocator: std.mem.Allocator, socket_path: []const u8) !void 
     if (!std.mem.startsWith(u8, std.mem.trim(u8, response, " \r\n\t"), "ok")) return error.InvalidResponse;
 }
 
+pub fn toggleAppGrid(allocator: std.mem.Allocator, socket_path: []const u8) !void {
+    const response = try request(allocator, socket_path, "app-grid toggle\n");
+    defer allocator.free(response);
+    if (!std.mem.startsWith(u8, std.mem.trim(u8, response, " \r\n\t"), "ok")) return error.InvalidResponse;
+}
+
 pub fn updateGlassRegion(
     allocator: std.mem.Allocator,
     socket_path: []const u8,
