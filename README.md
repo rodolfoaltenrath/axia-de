@@ -134,6 +134,12 @@ scripts/prealpha-check.sh
 
 O script roda build Debug, testes, build `ReleaseSafe`, `git diff --check`, instala a release em um prefixo temporario e sobe uma sessao headless curta para validar binarios, assets, docs, metadados `.desktop`, output, painel e dock.
 
+Para preparar o smoke visual manual com relatorio preenchivel:
+
+```bash
+AXIA_PREALPHA_PREFIX=/tmp/axia-prealpha-manual scripts/prepare-manual-smoke.sh
+```
+
 O build tambem instala assets e metadados de sessao no prefixo:
 
 ```text

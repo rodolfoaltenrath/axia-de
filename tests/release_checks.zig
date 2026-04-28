@@ -27,6 +27,8 @@ test "pre-alpha packaging metadata exists" {
         "scripts/dev-session.sh",
         "scripts/dev-restart.sh",
         "scripts/session-headless-check.sh",
+        "scripts/prepare-manual-smoke.sh",
+        "docs/smoke-report-template.md",
     };
 
     for (files) |path| {
@@ -48,6 +50,8 @@ test "pre-alpha scripts and desktop entries are wired" {
     try std.testing.expect(dev_restart_stat.mode & 0o111 != 0);
     const session_headless_stat = try std.fs.cwd().statFile("scripts/session-headless-check.sh");
     try std.testing.expect(session_headless_stat.mode & 0o111 != 0);
+    const manual_smoke_stat = try std.fs.cwd().statFile("scripts/prepare-manual-smoke.sh");
+    try std.testing.expect(manual_smoke_stat.mode & 0o111 != 0);
 
     try expectFileContains("packaging/bin/axia-session", "exec \"$bin_dir/axia-de\"");
     try expectFileContains("packaging/bin/axia-session", "AXIA_BIN_DIR");
@@ -61,6 +65,9 @@ test "pre-alpha scripts and desktop entries are wired" {
     try expectFileContains("README.md", "scripts/dev-session.sh");
     try expectFileContains("README.md", "scripts/dev-restart.sh");
     try expectFileContains("scripts/prealpha-check.sh", "scripts/session-headless-check.sh");
+    try expectFileContains("README.md", "scripts/prepare-manual-smoke.sh");
+    try expectFileContains("docs/smoke-test.md", "docs/smoke-report-template.md");
+    try expectFileContains("docs/smoke-report-template.md", "Aprovado para publicar pre-alpha");
 }
 
 test "installed wallpaper paths still match presets" {

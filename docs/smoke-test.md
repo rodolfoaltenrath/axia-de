@@ -29,6 +29,14 @@ Para repetir apenas o smoke headless da sessao instalada:
 AXIA_SESSION_CHECK_PREFIX=/tmp/axia-prealpha scripts/session-headless-check.sh
 ```
 
+Para preparar o teste visual manual com prefixo fixo e gerar um relatorio preenchivel:
+
+```bash
+AXIA_PREALPHA_PREFIX=/tmp/axia-prealpha-manual scripts/prepare-manual-smoke.sh
+```
+
+O script imprime o comando da sessao instalada e cria um arquivo `/tmp/axia-smoke-report-*.md` baseado em `docs/smoke-report-template.md`.
+
 ## Fluxo de desenvolvimento instalado
 
 Para dogfood enquanto edita o repo, use:
