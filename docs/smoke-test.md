@@ -58,6 +58,9 @@ Use `scripts/dev-restart.sh compositor` para reinstalar o compositor no prefixo 
 6. Mova uma janela para outra workspace com `Super+Shift+1..4`.
 7. Mova e redimensione uma janela com `Super + botao esquerdo/direito`.
 8. Arraste uma janela para bordas e cantos para validar snap preview.
+9. Arraste uma janela maximizada pela barra de titulo; ela deve voltar para floating antes de mover.
+10. Aplique snap lateral/topo, mova a janela de novo e confirme que a geometria floating anterior foi preservada.
+11. Maximize uma janela encaixada e depois restaure; ela deve voltar para a geometria floating anterior, nao para o retangulo encaixado.
 
 ## Apps nativas
 

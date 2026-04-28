@@ -121,6 +121,9 @@ pub const InteractiveState = struct {
     pub fn finish(self: *InteractiveState) void {
         if (self.view) |view| {
             _ = c.wlr_xdg_toplevel_set_resizing(view.toplevel, false);
+            if (self.mode == .move) {
+                view.finishInteractiveMove();
+            }
         }
 
         self.mode = .none;

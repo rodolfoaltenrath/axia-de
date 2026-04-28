@@ -572,6 +572,7 @@ pub const XdgManager = struct {
                 .titlebar => {
                     if (state == c.WL_POINTER_BUTTON_STATE_PRESSED and button == 0x110) {
                         const view = hit.view orelse return;
+                        view.prepareForInteractiveMove(lx, ly);
                         self.interactive.beginMoveCompositor(view, lx, ly);
                     }
                 },
@@ -826,8 +827,14 @@ pub const XdgManager = struct {
     fn applySnapIfNeeded(self: *XdgManager) void {
         if (self.snap_target == .none) return;
         const view = self.interactive.view orelse return;
+        view.rememberRestoreGeometry(
+            self.interactive.grab_x,
+            self.interactive.grab_y,
+            self.interactive.grab_width,
+            self.interactive.grab_height,
+        );
         if (self.snap_target == .full) {
-            view.maximizeToUsableArea(self.fullSnapArea());
+            view.maximizeToUsableAreaPreservingRestore(self.fullSnapArea());
             return;
         }
 
@@ -979,11 +986,12 @@ pub const XdgManager = struct {
         }
 
         self.focusView(view);
+        view.prepareForInteractiveMove(self.cursor_lx, self.cursor_ly);
         self.interactive.beginMove(view, self.cursor_lx, self.cursor_ly);
     }
 
     fn beginInteractiveResize(self: *XdgManager, view: *View, serial: u32, edges: u32) void {
-        if (!view.canStartInteractive()) return;
+        if (!view.canStartInteractiveResize()) return;
         if (!c.wlr_seat_validate_pointer_grab_serial(self.seat, view.xdg_surface.*.surface, serial)) {
             return;
         }
@@ -1002,10 +1010,12 @@ pub const XdgManager = struct {
 
         switch (button) {
             0x110 => {
+                view.prepareForInteractiveMove(lx, ly);
                 self.interactive.beginMoveCompositor(view, lx, ly);
                 return true;
             },
             0x111 => {
+                if (!view.canStartInteractiveResize()) return false;
                 const edges = if (hit.kind == .resize)
                     hit.resize_edges
                 else
