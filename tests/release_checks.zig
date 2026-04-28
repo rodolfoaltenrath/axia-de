@@ -26,6 +26,7 @@ test "pre-alpha packaging metadata exists" {
         "scripts/dev-install.sh",
         "scripts/dev-session.sh",
         "scripts/dev-restart.sh",
+        "scripts/session-headless-check.sh",
     };
 
     for (files) |path| {
@@ -45,6 +46,8 @@ test "pre-alpha scripts and desktop entries are wired" {
     try std.testing.expect(dev_session_stat.mode & 0o111 != 0);
     const dev_restart_stat = try std.fs.cwd().statFile("scripts/dev-restart.sh");
     try std.testing.expect(dev_restart_stat.mode & 0o111 != 0);
+    const session_headless_stat = try std.fs.cwd().statFile("scripts/session-headless-check.sh");
+    try std.testing.expect(session_headless_stat.mode & 0o111 != 0);
 
     try expectFileContains("packaging/bin/axia-session", "exec \"$bin_dir/axia-de\"");
     try expectFileContains("packaging/bin/axia-session", "AXIA_BIN_DIR");
@@ -57,6 +60,7 @@ test "pre-alpha scripts and desktop entries are wired" {
     try expectFileContains("docs/known-issues.md", "pre-alpha");
     try expectFileContains("README.md", "scripts/dev-session.sh");
     try expectFileContains("README.md", "scripts/dev-restart.sh");
+    try expectFileContains("scripts/prealpha-check.sh", "scripts/session-headless-check.sh");
 }
 
 test "installed wallpaper paths still match presets" {

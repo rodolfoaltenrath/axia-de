@@ -57,6 +57,9 @@ require_path "$prefix/share/doc/axia-de/smoke-test.md"
 require_path "$prefix/share/doc/axia-de/known-issues.md"
 require_path "$prefix/share/doc/axia-de/README.md"
 
+info "checking headless installed session"
+AXIA_SESSION_CHECK_PREFIX="$prefix" scripts/session-headless-check.sh
+
 info "pre-alpha build checks passed"
 printf 'Installed prefix: %s\n' "$prefix"
 printf 'Manual dogfood roteiro: docs/smoke-test.md\n'

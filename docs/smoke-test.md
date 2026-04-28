@@ -15,11 +15,18 @@ Resultado esperado:
 - o script executa `zig build`, `zig build test`, `zig build -Doptimize=ReleaseSafe` e `git diff --check`
 - o prefixo temporario contem `axia-de`, `axia-panel`, `axia-dock`, `axia-launcher`, `axia-app-grid`, `axia-files`, `axia-settings` e `axia-session`
 - o prefixo temporario contem assets, docs, `.desktop` de apps e `.desktop` da sessao Wayland
+- a sessao instalada inicia em backend headless por alguns segundos e configura output, painel e dock
 
 Para escolher um prefixo especifico:
 
 ```bash
 AXIA_PREALPHA_PREFIX=/tmp/axia-prealpha scripts/prealpha-check.sh
+```
+
+Para repetir apenas o smoke headless da sessao instalada:
+
+```bash
+AXIA_SESSION_CHECK_PREFIX=/tmp/axia-prealpha scripts/session-headless-check.sh
 ```
 
 ## Fluxo de desenvolvimento instalado

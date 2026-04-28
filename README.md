@@ -132,7 +132,7 @@ Checks recomendados antes de abrir uma build para teste:
 scripts/prealpha-check.sh
 ```
 
-O script roda build Debug, testes, build `ReleaseSafe`, `git diff --check` e instala a release em um prefixo temporario para validar binarios, assets, docs e metadados `.desktop`.
+O script roda build Debug, testes, build `ReleaseSafe`, `git diff --check`, instala a release em um prefixo temporario e sobe uma sessao headless curta para validar binarios, assets, docs, metadados `.desktop`, output, painel e dock.
 
 O build tambem instala assets e metadados de sessao no prefixo:
 
