@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Axia Files
+Name[pt_BR]=Arquivos
+Comment=Browse files with the Axia file manager
+Comment[pt_BR]=Navegue por arquivos com o gerenciador do Axia
+Exec=axia-files
+Icon=folder
+Terminal=false
+Type=Application
+Categories=System;FileManager;

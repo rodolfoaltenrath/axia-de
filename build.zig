@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const asset_install_subdir = "share/axia-de/assets";
 
     // Arch/CachyOS ships wlroots with versioned sonames/includes.
     const wlroots_lib = b.option([]const u8, "wlroots-lib", "wlroots library name") orelse "wlroots-0.18";
@@ -63,6 +64,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     runtime_catalog_module.addImport("apps_catalog", apps_catalog_module);
+    const assets_module = b.createModule(.{
+        .root_source_file = b.path("src/assets.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
     const client_wl_module = b.createModule(.{
         .root_source_file = b.path("src/client/wl.zig"),
         .target = target,
@@ -301,6 +307,7 @@ pub fn build(b: *std.Build) void {
     files_app_exe.root_module.addImport("client_chrome", client_chrome_module);
     files_app_exe.root_module.addImport("toast_model", toast_model_module);
     files_app_exe.root_module.addImport("toast_client", toast_client_module);
+    files_app_exe.root_module.addImport("axia_assets", assets_module);
     files_app_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     files_app_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     files_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
@@ -344,6 +351,47 @@ pub fn build(b: *std.Build) void {
     settings_app_exe.linkSystemLibrary("cairo");
     b.installArtifact(settings_app_exe);
 
+    b.installDirectory(.{
+        .source_dir = b.path("assets"),
+        .install_dir = .prefix,
+        .install_subdir = asset_install_subdir,
+    });
+    b.installDirectory(.{
+        .source_dir = b.path("docs"),
+        .install_dir = .prefix,
+        .install_subdir = "share/doc/axia-de",
+        .include_extensions = &.{".md"},
+    });
+    b.installDirectory(.{
+        .source_dir = b.path("packaging/applications"),
+        .install_dir = .prefix,
+        .install_subdir = "share/applications",
+        .include_extensions = &.{".desktop"},
+    });
+    b.installDirectory(.{
+        .source_dir = b.path("packaging/wayland-sessions"),
+        .install_dir = .prefix,
+        .install_subdir = "share/wayland-sessions",
+        .include_extensions = &.{".desktop"},
+    });
+    b.installBinFile("packaging/bin/axia-session", "axia-session");
+    b.installFile("README.md", "share/doc/axia-de/README.md");
+
+    const release_checks_module = b.createModule(.{
+        .root_source_file = b.path("tests/release_checks.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    release_checks_module.addImport("axia_assets", assets_module);
+    release_checks_module.addImport("settings_model", settings_model_module);
+    const release_checks = b.addTest(.{
+        .root_module = release_checks_module,
+    });
+    const run_release_checks = b.addRunArtifact(release_checks);
+
+    const test_step = b.step("test", "Run Axia-DE release readiness checks");
+    test_step.dependOn(&run_release_checks.step);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
@@ -370,4 +418,40 @@ pub fn build(b: *std.Build) void {
 
     const run_dock_step = b.step("run-dock", "Run Axia dock client");
     run_dock_step.dependOn(&run_dock_cmd.step);
+
+    const run_launcher_cmd = b.addRunArtifact(launcher_app_exe);
+    run_launcher_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_launcher_cmd.addArgs(args);
+    }
+
+    const run_launcher_step = b.step("run-launcher", "Run Axia launcher client");
+    run_launcher_step.dependOn(&run_launcher_cmd.step);
+
+    const run_app_grid_cmd = b.addRunArtifact(app_grid_exe);
+    run_app_grid_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_app_grid_cmd.addArgs(args);
+    }
+
+    const run_app_grid_step = b.step("run-app-grid", "Run Axia app grid client");
+    run_app_grid_step.dependOn(&run_app_grid_cmd.step);
+
+    const run_files_cmd = b.addRunArtifact(files_app_exe);
+    run_files_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_files_cmd.addArgs(args);
+    }
+
+    const run_files_step = b.step("run-files", "Run Axia files app");
+    run_files_step.dependOn(&run_files_cmd.step);
+
+    const run_settings_cmd = b.addRunArtifact(settings_app_exe);
+    run_settings_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_settings_cmd.addArgs(args);
+    }
+
+    const run_settings_step = b.step("run-settings", "Run Axia settings app");
+    run_settings_step.dependOn(&run_settings_cmd.step);
 }

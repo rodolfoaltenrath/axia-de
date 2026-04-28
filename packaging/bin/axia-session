@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+bin_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+prefix_dir="$(dirname -- "$bin_dir")"
+
+if [ -z "${XDG_CURRENT_DESKTOP:-}" ]; then
+  export XDG_CURRENT_DESKTOP=Axia
+fi
+
+if [ -z "${DESKTOP_SESSION:-}" ]; then
+  export DESKTOP_SESSION=axia-de
+fi
+
+if [ -z "${AXIA_BIN_DIR:-}" ]; then
+  export AXIA_BIN_DIR="$bin_dir"
+fi
+
+if [ -z "${AXIA_ASSET_DIR:-}" ]; then
+  export AXIA_ASSET_DIR="$prefix_dir/share/axia-de/assets"
+fi
+
+exec "$bin_dir/axia-de" "$@"

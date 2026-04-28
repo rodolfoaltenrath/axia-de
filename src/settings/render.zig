@@ -101,7 +101,7 @@ pub fn drawPanel(cr: *c.cairo_t, state: State) void {
 fn drawWallpaperPage(cr: *c.cairo_t, state: State) void {
     for (model.wallpaper_presets, 0..) |preset, index| {
         const rect = wallpaperCardRect(index);
-        const is_current = state.current_wallpaper_path != null and std.mem.eql(u8, state.current_wallpaper_path.?, preset.path);
+        const is_current = state.current_wallpaper_path != null and model.wallpaperPathMatches(state.current_wallpaper_path.?, preset.path);
         drawRoundedRect(cr, rect, 16);
 
         if (is_current) {

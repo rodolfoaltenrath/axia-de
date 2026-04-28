@@ -1,5 +1,6 @@
 const std = @import("std");
 const c = @import("client_wl").c;
+const assets = @import("axia_assets");
 const browser = @import("browser.zig");
 
 pub const SidebarIcons = struct {
@@ -11,7 +12,8 @@ pub const SidebarIcons = struct {
         errdefer icons.deinit();
 
         inline for (browser.sidebar_items, 0..) |item, index| {
-            const path = assetPathFor(item.target);
+            const path = try assets.resolvePath(allocator, assetPathFor(item.target));
+            defer allocator.free(path);
             icons.surfaces[index] = try loadSurface(path);
         }
 

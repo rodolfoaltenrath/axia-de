@@ -1,5 +1,6 @@
 const std = @import("std");
 const c = @import("../wl.zig").c;
+const assets = @import("../assets.zig");
 
 const log = std.log.scoped(.axia_wallpaper);
 
@@ -55,8 +56,9 @@ pub const WallpaperAsset = struct {
         if (from_env) |path| {
             if (path.len == 0) {
                 allocator.free(path);
-            } else if (std.fs.cwd().access(path, .{})) {
-                return path;
+            } else if (resolveImagePath(allocator, path)) |resolved| {
+                allocator.free(path);
+                return resolved;
             } else |_| {
                 log.warn("AXIA_WALLPAPER points to missing file: {s}", .{path});
                 allocator.free(path);
@@ -69,13 +71,30 @@ pub const WallpaperAsset = struct {
         };
 
         inline for (fallback_paths) |path| {
-            if (std.fs.cwd().access(path, .{})) {
-                return try allocator.dupe(u8, path);
+            if (resolveImagePath(allocator, path)) |resolved| {
+                return resolved;
             } else |_| {}
         }
 
         log.warn("no wallpaper asset found, using abstract fallback background", .{});
         return null;
+    }
+
+    fn resolveImagePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+        if (std.fs.path.isAbsolute(path)) {
+            std.fs.accessAbsolute(path, .{}) catch return error.FileNotFound;
+            return try allocator.dupe(u8, path);
+        }
+
+        if (assets.resolvePath(allocator, path)) |resolved| {
+            return resolved;
+        } else |_| {
+            if (std.fs.cwd().access(path, .{})) {
+                return try allocator.dupe(u8, path);
+            } else |_| {
+                return error.FileNotFound;
+            }
+        }
     }
 
     fn loadFromOwnedPath(allocator: std.mem.Allocator, owned_path: []u8) !*WallpaperAsset {
@@ -102,8 +121,11 @@ const PreparedPath = struct {
 };
 
 fn prepareLoadPath(allocator: std.mem.Allocator, path: []const u8) !PreparedPath {
+    const resolved_path = try WallpaperAsset.resolveImagePath(allocator, path);
+    defer allocator.free(resolved_path);
+
     if (endsWithIgnoreCase(path, ".png")) {
-        return .{ .load_path = try allocator.dupe(u8, path) };
+        return .{ .load_path = try allocator.dupe(u8, resolved_path) };
     }
 
     if (!isConvertibleImage(path)) {
@@ -115,7 +137,7 @@ fn prepareLoadPath(allocator: std.mem.Allocator, path: []const u8) !PreparedPath
 
     var child = std.process.Child.init(&.{
         "magick",
-        path,
+        resolved_path,
         "-auto-orient",
         cache_path,
     }, allocator);

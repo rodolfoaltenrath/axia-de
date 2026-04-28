@@ -28,10 +28,17 @@ const toast_model = @import("../toast/model.zig");
 const log = std.log.scoped(.axia);
 const shell_supervisor_interval_ms = 1000;
 
-const ScreenshotAreaTask = struct {
+const ScreenshotTask = struct {
     active_flag: *std.atomic.Value(bool),
     socket_name: []u8,
     socket_path: []u8,
+    mode: Mode,
+
+    const Mode = union(enum) {
+        fullscreen,
+        focused: c.struct_wlr_box,
+        area,
+    };
 };
 
 pub const Server = struct {
@@ -65,7 +72,7 @@ pub const Server = struct {
     desktop_menu: DesktopMenu,
     settings: SettingsManager,
     settings_prefs: SettingsPreferencesState,
-    screenshot_area_active: *std.atomic.Value(bool),
+    screenshot_task_active: *std.atomic.Value(bool),
     dock_glass_surface_box: ?c.struct_wlr_box = null,
     dock_surface_height: i32 = 0,
 
@@ -203,8 +210,8 @@ pub const Server = struct {
             try settings.setCurrentWallpaperPath(asset.source_path);
         }
 
-        const screenshot_area_active = try std.heap.page_allocator.create(std.atomic.Value(bool));
-        screenshot_area_active.* = std.atomic.Value(bool).init(false);
+        const screenshot_task_active = try std.heap.page_allocator.create(std.atomic.Value(bool));
+        screenshot_task_active.* = std.atomic.Value(bool).init(false);
 
         xdg.setWorkspaceWrap(settings_prefs.workspace_wrap);
         xdg.activateWorkspace(settings_prefs.startup_workspace);
@@ -236,7 +243,7 @@ pub const Server = struct {
             .desktop_menu = desktop_menu,
             .settings = settings,
             .settings_prefs = settings_prefs,
-            .screenshot_area_active = screenshot_area_active,
+            .screenshot_task_active = screenshot_task_active,
         };
     }
 
@@ -301,6 +308,7 @@ pub const Server = struct {
         self.desktop_menu.deinit();
         self.settings.deinit();
         self.glass.deinit();
+        std.heap.page_allocator.destroy(self.screenshot_task_active);
 
         self.scene.deinit();
         _ = self.protocols;
@@ -372,7 +380,7 @@ pub const Server = struct {
         if (self.settings.primary_output == null) {
             self.settings.setPrimaryOutput(wlr_output);
         }
-        self.xdg.setUsableArea(self.layers.getUsableArea());
+        self.updateShellUsableArea();
         self.syncGlassRegions();
     }
 
@@ -439,8 +447,36 @@ pub const Server = struct {
     fn handleLayerLayoutChanged(ctx: ?*anyopaque, usable_area: c.struct_wlr_box) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
-        server.xdg.setUsableArea(usable_area);
+        _ = usable_area;
+        server.updateShellUsableArea();
         server.syncGlassRegions();
+    }
+
+    fn updateShellUsableArea(self: *Server) void {
+        var usable_area = self.layers.getUsableArea();
+        if (usable_area.width <= 0 or usable_area.height <= 0) return;
+
+        if (self.dock_glass_surface_box) |surface_box| {
+            if (self.dock_surface_height > 0 and surface_box.width > 0 and surface_box.height > 0) {
+                const output = if (self.layers.primary_output) |primary|
+                    primary
+                else
+                    self.xdg.primary_output orelse null;
+                if (output) |wlr_output| {
+                    var full_area = std.mem.zeroes(c.struct_wlr_box);
+                    c.wlr_output_layout_get_box(self.output_layout, wlr_output, &full_area);
+                    if (full_area.width > 0 and full_area.height > 0) {
+                        const dock_top = full_area.y + full_area.height - self.dock_surface_height + surface_box.y;
+                        const usable_bottom = usable_area.y + usable_area.height;
+                        if (dock_top > usable_area.y and dock_top < usable_bottom) {
+                            usable_area.height = dock_top - usable_area.y;
+                        }
+                    }
+                }
+            }
+        }
+
+        self.xdg.setUsableArea(usable_area);
     }
 
     fn handleShellSupervisorTimer(data: ?*anyopaque) callconv(.c) c_int {
@@ -530,11 +566,13 @@ pub const Server = struct {
         if (surface_box.width <= 0 or surface_box.height <= 0) {
             server.dock_glass_surface_box = null;
             server.dock_surface_height = surface_height;
+            server.updateShellUsableArea();
             server.syncGlassRegions();
             return;
         }
         server.dock_glass_surface_box = surface_box;
         server.dock_surface_height = surface_height;
+        server.updateShellUsableArea();
         server.syncGlassRegions();
     }
 
@@ -548,10 +586,7 @@ pub const Server = struct {
         }
 
         if (sym == c.XKB_KEY_Print and (modifiers & c.WLR_MODIFIER_SHIFT) != 0) {
-            server.captureFocusedWindowScreenshot() catch |err| {
-                log.err("failed to capture focused window screenshot: {}", .{err});
-                server.showToast(.failure, "Falha ao capturar a janela.");
-            };
+            server.captureFocusedWindowScreenshot();
             return true;
         }
 
@@ -579,10 +614,7 @@ pub const Server = struct {
 
         return switch (sym) {
             c.XKB_KEY_Print => blk: {
-                server.captureScreenshot() catch |err| {
-                    log.err("failed to capture screenshot: {}", .{err});
-                    server.showToast(.failure, "Falha ao capturar a tela.");
-                };
+                server.captureScreenshot();
                 break :blk true;
             },
             c.XKB_KEY_a, c.XKB_KEY_A => blk: {
@@ -920,12 +952,12 @@ pub const Server = struct {
         };
     }
 
-    fn captureScreenshot(self: *Server) !void {
-        try self.captureScreenshotWithMode(.fullscreen);
+    fn captureScreenshot(self: *Server) void {
+        self.startScreenshotTask(.fullscreen, null);
     }
 
-    fn captureFocusedWindowScreenshot(self: *Server) !void {
-        const box = self.xdg.focusedViewOuterBox() orelse {
+    fn captureFocusedWindowScreenshot(self: *Server) void {
+        const box = self.xdg.focusedViewCaptureBox() orelse {
             self.showToast(.warning, "Nenhuma janela focada para capturar.");
             return;
         };
@@ -934,184 +966,82 @@ pub const Server = struct {
             return;
         }
 
-        try self.captureScreenshotWithMode(.{ .focused = box });
+        self.startScreenshotTask(.{ .focused = box }, null);
     }
 
     fn captureAreaScreenshot(self: *Server) void {
-        if (self.screenshot_area_active.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
-            self.showToast(.warning, "Ja existe uma selecao de screenshot em andamento.");
-            return;
-        }
-
-        const task = std.heap.page_allocator.create(ScreenshotAreaTask) catch {
-            self.screenshot_area_active.store(false, .release);
-            self.showToast(.failure, "Falha ao iniciar a captura por area.");
-            return;
-        };
-        errdefer std.heap.page_allocator.destroy(task);
-
-        task.socket_name = std.heap.page_allocator.dupe(u8, std.mem.span(self.socket_name)) catch {
-            self.screenshot_area_active.store(false, .release);
-            self.showToast(.failure, "Falha ao preparar a captura por area.");
-            return;
-        };
-        errdefer std.heap.page_allocator.free(task.socket_name);
-
-        task.socket_path = std.heap.page_allocator.dupe(u8, self.ipc.path()) catch {
-            self.screenshot_area_active.store(false, .release);
-            self.showToast(.failure, "Falha ao preparar a captura por area.");
-            return;
-        };
-        errdefer std.heap.page_allocator.free(task.socket_path);
-
-        task.active_flag = self.screenshot_area_active;
-
-        const thread = std.Thread.spawn(.{}, runAreaScreenshotTask, .{task}) catch |err| {
-            std.heap.page_allocator.free(task.socket_path);
-            std.heap.page_allocator.free(task.socket_name);
-            std.heap.page_allocator.destroy(task);
-            self.screenshot_area_active.store(false, .release);
-            log.err("failed to spawn area screenshot thread: {}", .{err});
-            self.showToast(.failure, "Falha ao iniciar a captura por area.");
-            return;
-        };
-        thread.detach();
-        self.showToast(.info, "Selecione uma area para screenshot.");
+        self.startScreenshotTask(.area, "Selecione uma area para screenshot.");
     }
 
-    const ScreenshotMode = union(enum) {
-        fullscreen,
-        focused: c.struct_wlr_box,
-    };
-
-    fn captureScreenshotWithMode(self: *Server, mode: ScreenshotMode) !void {
-        const screenshot_dir = try ensureScreenshotDirectoryAlloc(self.allocator);
-        defer self.allocator.free(screenshot_dir);
-
-        const timestamp_ms = std.time.milliTimestamp();
-        const file_name = switch (mode) {
-            .fullscreen => try std.fmt.allocPrint(self.allocator, "axia-screenshot-{d}.png", .{timestamp_ms}),
-            .focused => try std.fmt.allocPrint(self.allocator, "axia-window-screenshot-{d}.png", .{timestamp_ms}),
-        };
-        defer self.allocator.free(file_name);
-
-        const screenshot_path = try std.fs.path.join(self.allocator, &.{ screenshot_dir, file_name });
-        defer self.allocator.free(screenshot_path);
-
-        var env_map = std.process.EnvMap.init(self.allocator);
-        defer env_map.deinit();
-        try copyInheritedEnvAlloc(self.allocator, &env_map);
-        try env_map.put("WAYLAND_DISPLAY", std.mem.span(self.socket_name));
-
-        const geometry = switch (mode) {
-            .fullscreen => null,
-            .focused => |box| try std.fmt.allocPrint(self.allocator, "{d},{d} {d}x{d}", .{ box.x, box.y, box.width, box.height }),
-        };
-        defer if (geometry) |value| self.allocator.free(value);
-
-        const result = switch (mode) {
-            .fullscreen => std.process.Child.run(.{
-                .allocator = self.allocator,
-                .argv = &.{ "grim", screenshot_path },
-                .env_map = &env_map,
-                .max_output_bytes = 8 * 1024,
-            }),
-            .focused => std.process.Child.run(.{
-                .allocator = self.allocator,
-                .argv = &.{ "grim", "-g", geometry.?, screenshot_path },
-                .env_map = &env_map,
-                .max_output_bytes = 8 * 1024,
-            }),
-        } catch |err| {
-            switch (err) {
-                error.FileNotFound => {
-                    self.showToast(.failure, "Instale o grim para usar screenshots.");
-                    return;
-                },
-                else => return err,
-            }
-        };
-        defer self.allocator.free(result.stdout);
-        defer self.allocator.free(result.stderr);
-
-        switch (result.term) {
-            .Exited => |code| {
-                if (code == 0) {
-                    const message = switch (mode) {
-                        .fullscreen => try std.fmt.allocPrint(self.allocator, "Screenshot salva em {s}", .{file_name}),
-                        .focused => try std.fmt.allocPrint(self.allocator, "Screenshot da janela salva em {s}", .{file_name}),
-                    };
-                    defer self.allocator.free(message);
-                    self.showToast(.success, message);
-                    return;
-                }
-
-                log.err("grim exited with code {d}: {s}", .{ code, result.stderr });
-                self.showToast(.failure, "Falha ao salvar screenshot.");
-            },
-            else => {
-                log.err("grim exited unexpectedly: {any}", .{result.term});
-                self.showToast(.failure, "Falha ao capturar screenshot.");
-            },
-        }
-    }
-
-    fn runAreaScreenshotTask(task: *ScreenshotAreaTask) void {
-        defer task.active_flag.store(false, .release);
-        defer std.heap.page_allocator.free(task.socket_path);
-        defer std.heap.page_allocator.free(task.socket_name);
+    fn runScreenshotTask(task: *ScreenshotTask) void {
         defer std.heap.page_allocator.destroy(task);
+        defer std.heap.page_allocator.free(task.socket_name);
+        defer std.heap.page_allocator.free(task.socket_path);
+        defer task.active_flag.store(false, .release);
 
         const allocator = std.heap.page_allocator;
 
         var env_map = std.process.EnvMap.init(allocator);
         defer env_map.deinit();
         copyInheritedEnvAlloc(allocator, &env_map) catch {
-            sendToastMessage(allocator, task.socket_path, .failure, "Falha ao preparar screenshot por area.");
+            sendToastMessage(allocator, task.socket_path, .failure, "Falha ao preparar screenshot.");
             return;
         };
         env_map.put("WAYLAND_DISPLAY", task.socket_name) catch {
-            sendToastMessage(allocator, task.socket_path, .failure, "Falha ao preparar screenshot por area.");
+            sendToastMessage(allocator, task.socket_path, .failure, "Falha ao preparar screenshot.");
             return;
         };
 
-        const selection_result = std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &.{ "slurp" },
-            .env_map = &env_map,
-            .max_output_bytes = 4 * 1024,
-        }) catch |err| {
-            switch (err) {
-                error.FileNotFound => sendToastMessage(allocator, task.socket_path, .failure, "Instale o slurp para selecionar a area."),
-                else => sendToastMessage(allocator, task.socket_path, .failure, "Falha ao abrir o seletor de area."),
-            }
-            return;
-        };
-        defer allocator.free(selection_result.stdout);
-        defer allocator.free(selection_result.stderr);
-
-        const selection = switch (selection_result.term) {
-            .Exited => |code| blk: {
-                if (code != 0) {
-                    if (code == 1) {
-                        sendToastMessage(allocator, task.socket_path, .info, "Screenshot por area cancelada.");
-                    } else {
-                        sendToastMessage(allocator, task.socket_path, .failure, "Falha ao selecionar a area.");
+        const selection: ?[]u8 = switch (task.mode) {
+            .area => blk: {
+                const selection_result = std.process.Child.run(.{
+                    .allocator = allocator,
+                    .argv = &.{ "slurp" },
+                    .env_map = &env_map,
+                    .max_output_bytes = 4 * 1024,
+                }) catch |err| {
+                    switch (err) {
+                        error.FileNotFound => sendToastMessage(allocator, task.socket_path, .failure, "Instale o slurp para selecionar a area."),
+                        else => sendToastMessage(allocator, task.socket_path, .failure, "Falha ao abrir o seletor de area."),
                     }
                     return;
-                }
-                break :blk std.mem.trim(u8, selection_result.stdout, " \r\n\t");
+                };
+                defer allocator.free(selection_result.stdout);
+                defer allocator.free(selection_result.stderr);
+
+                break :blk switch (selection_result.term) {
+                    .Exited => |code| blk2: {
+                        if (code != 0) {
+                            if (code == 1) {
+                                sendToastMessage(allocator, task.socket_path, .info, "Screenshot por area cancelada.");
+                            } else {
+                                sendToastMessage(allocator, task.socket_path, .failure, "Falha ao selecionar a area.");
+                            }
+                            return;
+                        }
+                        const trimmed = std.mem.trim(u8, selection_result.stdout, " \r\n\t");
+                        if (trimmed.len == 0) {
+                            sendToastMessage(allocator, task.socket_path, .info, "Screenshot por area cancelada.");
+                            return;
+                        }
+                        break :blk2 allocator.dupe(u8, trimmed) catch {
+                            sendToastMessage(allocator, task.socket_path, .failure, "Falha ao preparar screenshot.");
+                            return;
+                        };
+                    },
+                    else => {
+                        sendToastMessage(allocator, task.socket_path, .failure, "Falha ao selecionar a area.");
+                        return;
+                    },
+                };
             },
-            else => {
-                sendToastMessage(allocator, task.socket_path, .failure, "Falha ao selecionar a area.");
+            .focused => |box| std.fmt.allocPrint(allocator, "{d},{d} {d}x{d}", .{ box.x, box.y, box.width, box.height }) catch {
+                sendToastMessage(allocator, task.socket_path, .failure, "Falha ao preparar screenshot.");
                 return;
             },
+            .fullscreen => null,
         };
-
-        if (selection.len == 0) {
-            sendToastMessage(allocator, task.socket_path, .info, "Screenshot por area cancelada.");
-            return;
-        }
+        defer if (selection) |value| allocator.free(value);
 
         const screenshot_dir = ensureScreenshotDirectoryAlloc(allocator) catch {
             sendToastMessage(allocator, task.socket_path, .failure, "Falha ao criar pasta de screenshots.");
@@ -1120,27 +1050,39 @@ pub const Server = struct {
         defer allocator.free(screenshot_dir);
 
         const timestamp_ms = std.time.milliTimestamp();
-        const file_name = std.fmt.allocPrint(allocator, "axia-area-screenshot-{d}.png", .{timestamp_ms}) catch {
-            sendToastMessage(allocator, task.socket_path, .failure, "Falha ao preparar screenshot por area.");
+        const file_name = switch (task.mode) {
+            .area => std.fmt.allocPrint(allocator, "axia-area-screenshot-{d}.png", .{timestamp_ms}),
+            .focused => std.fmt.allocPrint(allocator, "axia-window-screenshot-{d}.png", .{timestamp_ms}),
+            .fullscreen => std.fmt.allocPrint(allocator, "axia-screenshot-{d}.png", .{timestamp_ms}),
+        } catch {
+            sendToastMessage(allocator, task.socket_path, .failure, "Falha ao preparar screenshot.");
             return;
         };
         defer allocator.free(file_name);
 
         const screenshot_path = std.fs.path.join(allocator, &.{ screenshot_dir, file_name }) catch {
-            sendToastMessage(allocator, task.socket_path, .failure, "Falha ao preparar screenshot por area.");
+            sendToastMessage(allocator, task.socket_path, .failure, "Falha ao preparar screenshot.");
             return;
         };
         defer allocator.free(screenshot_path);
 
-        const grim_result = std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &.{ "grim", "-g", selection, screenshot_path },
-            .env_map = &env_map,
-            .max_output_bytes = 8 * 1024,
-        }) catch |err| {
+        const grim_result = switch (task.mode) {
+            .area, .focused => std.process.Child.run(.{
+                .allocator = allocator,
+                .argv = &.{ "grim", "-g", selection.?, screenshot_path },
+                .env_map = &env_map,
+                .max_output_bytes = 8 * 1024,
+            }),
+            .fullscreen => std.process.Child.run(.{
+                .allocator = allocator,
+                .argv = &.{ "grim", screenshot_path },
+                .env_map = &env_map,
+                .max_output_bytes = 8 * 1024,
+            }),
+        } catch |err| {
             switch (err) {
                 error.FileNotFound => sendToastMessage(allocator, task.socket_path, .failure, "Instale o grim para usar screenshots."),
-                else => sendToastMessage(allocator, task.socket_path, .failure, "Falha ao capturar a area."),
+                else => sendToastMessage(allocator, task.socket_path, .failure, "Falha ao capturar screenshot."),
             }
             return;
         };
@@ -1150,17 +1092,93 @@ pub const Server = struct {
         switch (grim_result.term) {
             .Exited => |code| {
                 if (code == 0) {
-                    const message = std.fmt.allocPrint(allocator, "Screenshot da area salva em {s}", .{file_name}) catch {
-                        sendToastMessage(allocator, task.socket_path, .success, "Screenshot da area salva.");
+                    const message = switch (task.mode) {
+                        .area => std.fmt.allocPrint(allocator, "Screenshot da area salva em {s}", .{file_name}),
+                        .focused => std.fmt.allocPrint(allocator, "Screenshot da janela salva em {s}", .{file_name}),
+                        .fullscreen => std.fmt.allocPrint(allocator, "Screenshot salva em {s}", .{file_name}),
+                    } catch {
+                        sendToastMessage(allocator, task.socket_path, .success, "Screenshot salva.");
                         return;
                     };
                     defer allocator.free(message);
                     sendToastMessage(allocator, task.socket_path, .success, message);
                 } else {
-                    sendToastMessage(allocator, task.socket_path, .failure, "Falha ao capturar a area.");
+                    log.err(
+                        "grim exited with code {d} for mode {s} geometry={s}: {s}",
+                        .{
+                            code,
+                            switch (task.mode) {
+                                .area => "area",
+                                .focused => "focused",
+                                .fullscreen => "fullscreen",
+                            },
+                            selection orelse "<fullscreen>",
+                            grim_result.stderr,
+                        },
+                    );
+                    sendToastMessage(allocator, task.socket_path, .failure, "Falha ao capturar screenshot.");
                 }
             },
-            else => sendToastMessage(allocator, task.socket_path, .failure, "Falha ao capturar a area."),
+            else => |term| {
+                log.err(
+                    "grim exited unexpectedly for mode {s} geometry={s}: {any}",
+                    .{
+                        switch (task.mode) {
+                            .area => "area",
+                            .focused => "focused",
+                            .fullscreen => "fullscreen",
+                        },
+                        selection orelse "<fullscreen>",
+                        term,
+                    },
+                );
+                sendToastMessage(allocator, task.socket_path, .failure, "Falha ao capturar screenshot.");
+            },
+        }
+    }
+
+    fn startScreenshotTask(self: *Server, mode: ScreenshotTask.Mode, initial_message: ?[]const u8) void {
+        if (self.screenshot_task_active.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
+            self.showToast(.warning, "Ja existe uma captura em andamento.");
+            return;
+        }
+
+        const task = std.heap.page_allocator.create(ScreenshotTask) catch {
+            self.screenshot_task_active.store(false, .release);
+            self.showToast(.failure, "Falha ao iniciar a captura.");
+            return;
+        };
+        errdefer std.heap.page_allocator.destroy(task);
+
+        task.socket_name = std.heap.page_allocator.dupe(u8, std.mem.span(self.socket_name)) catch {
+            self.screenshot_task_active.store(false, .release);
+            self.showToast(.failure, "Falha ao preparar a captura.");
+            return;
+        };
+        errdefer std.heap.page_allocator.free(task.socket_name);
+
+        task.socket_path = std.heap.page_allocator.dupe(u8, self.ipc.path()) catch {
+            self.screenshot_task_active.store(false, .release);
+            self.showToast(.failure, "Falha ao preparar a captura.");
+            return;
+        };
+        errdefer std.heap.page_allocator.free(task.socket_path);
+
+        task.active_flag = self.screenshot_task_active;
+        task.mode = mode;
+
+        const thread = std.Thread.spawn(.{}, runScreenshotTask, .{task}) catch |err| {
+            std.heap.page_allocator.free(task.socket_path);
+            std.heap.page_allocator.free(task.socket_name);
+            std.heap.page_allocator.destroy(task);
+            self.screenshot_task_active.store(false, .release);
+            log.err("failed to spawn screenshot thread: {}", .{err});
+            self.showToast(.failure, "Falha ao iniciar a captura.");
+            return;
+        };
+        thread.detach();
+        if (initial_message) |message| {
+            self.showToast(.info, message);
         }
     }
 

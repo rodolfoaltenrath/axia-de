@@ -210,6 +210,12 @@ pub const XdgManager = struct {
         return view.outerBox();
     }
 
+    pub fn focusedViewCaptureBox(self: *const XdgManager) ?c.struct_wlr_box {
+        const view = self.focused_view orelse return null;
+        if (!view.mappedVisible()) return null;
+        return view.captureBox();
+    }
+
     pub fn showAppPreview(self: *XdgManager, app_id: []const u8, anchor_x: i32) !void {
         const view = self.findPreviewView(app_id) orelse {
             self.hideAppPreview();
@@ -218,9 +224,10 @@ pub const XdgManager = struct {
 
         self.hideAppPreview();
 
-        const preview_max_width: i32 = 320;
-        const preview_max_height: i32 = 200;
-        const preview_padding: i32 = 10;
+        const preview_max_width: i32 = 268;
+        const preview_max_height: i32 = 168;
+        const preview_padding: i32 = 8;
+        const preview_gap: i32 = 12;
         const width = @max(view.effectiveWidth(), 1);
         const height = @max(view.effectiveHeight(), 1);
         const scale = @min(
@@ -259,14 +266,22 @@ pub const XdgManager = struct {
             try self.snapshotPreviewBuffers(content_tree, view, scale, preview_padding);
         }
 
-        const output_area = self.outputArea();
         const margin: i32 = 16;
+        const output_area = self.outputArea();
+        const usable_bottom = if (self.usable_area.width > 0 and self.usable_area.height > 0)
+            self.usable_area.y + self.usable_area.height
+        else
+            output_area.y + output_area.height - 80;
         const x = std.math.clamp(
             anchor_x - @divTrunc(outer_width, 2),
             output_area.x + margin,
             output_area.x + output_area.width - outer_width - margin,
         );
-        const y = output_area.y + output_area.height - outer_height - 92;
+        const y = std.math.clamp(
+            usable_bottom - outer_height - preview_gap,
+            output_area.y + margin,
+            output_area.y + output_area.height - outer_height - margin,
+        );
         c.wlr_scene_node_set_position(&tree.*.node, x, y);
         c.wlr_scene_node_raise_to_top(&tree.*.node);
 
@@ -684,6 +699,7 @@ pub const XdgManager = struct {
     fn snapSpecAt(self: *const XdgManager, lx: f64, ly: f64) ?SnapPreviewSpec {
         const area = self.usable_area;
         if (area.width <= 0 or area.height <= 0) return null;
+        const full_area = self.fullSnapArea();
 
         const top_hard_zone = @as(f64, @floatFromInt(area.y)) + 8.0;
         const top_soft_zone = @as(f64, @floatFromInt(area.y)) + 60.0;
@@ -692,7 +708,7 @@ pub const XdgManager = struct {
         const right_edge = @as(f64, @floatFromInt(area.x + area.width));
 
         if (ly <= top_hard_zone) {
-            return .{ .target = .full, .rect = area };
+            return .{ .target = .full, .rect = full_area };
         }
 
         if (ly <= top_soft_zone) {
@@ -754,14 +770,34 @@ pub const XdgManager = struct {
         };
     }
 
+    fn fullSnapArea(self: *const XdgManager) c.struct_wlr_box {
+        const output_area = self.outputArea();
+        if (output_area.width <= 0 or output_area.height <= 0) return self.usable_area;
+        if (self.usable_area.width <= 0 or self.usable_area.height <= 0) return output_area;
+
+        const usable_bottom = self.usable_area.y + self.usable_area.height;
+        const bottom = std.math.clamp(
+            usable_bottom,
+            self.usable_area.y + 1,
+            output_area.y + output_area.height,
+        );
+
+        return .{
+            .x = self.usable_area.x,
+            .y = self.usable_area.y,
+            .width = self.usable_area.width,
+            .height = @max(1, bottom - self.usable_area.y),
+        };
+    }
+
     fn showSnapPreview(self: *XdgManager, spec: SnapPreviewSpec) !void {
         self.hideSnapPreview();
 
         const tree = c.wlr_scene_tree_create(self.overlay_root) orelse return;
         errdefer c.wlr_scene_node_destroy(&tree.*.node);
 
-        const fill_color = [4]f32{ 0.24, 0.62, 0.90, 0.18 };
-        const border_color = [4]f32{ 0.40, 0.88, 0.98, 0.82 };
+        const fill_color = [4]f32{ 0.18, 0.56, 0.92, 0.46 };
+        const border_color = [4]f32{ 0.42, 0.86, 1.0, 0.78 };
         const border: i32 = 2;
 
         c.wlr_scene_node_set_position(&tree.*.node, spec.rect.x, spec.rect.y);
@@ -790,6 +826,11 @@ pub const XdgManager = struct {
     fn applySnapIfNeeded(self: *XdgManager) void {
         if (self.snap_target == .none) return;
         const view = self.interactive.view orelse return;
+        if (self.snap_target == .full) {
+            view.maximizeToUsableArea(self.fullSnapArea());
+            return;
+        }
+
         const rect = snapRect(self.usable_area, self.snap_target);
         view.applyTiledRect(rect, snapEdges(self.snap_target));
     }

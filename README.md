@@ -79,6 +79,7 @@ Ao compilar, o projeto instala estes componentes:
 - `axia-panel`
 - `axia-dock`
 - `axia-launcher`
+- `axia-app-grid`
 - `axia-files`
 - `axia-settings`
 
@@ -106,7 +107,7 @@ Pacotes úteis para os recursos atuais do shell:
 sudo pacman -S --needed \
   networkmanager bluez bluez-utils rfkill \
   pipewire wireplumber \
-  ghostty firefox code grim slurp
+  ghostty firefox code grim slurp imagemagick
 ```
 
 Observação:
@@ -117,11 +118,61 @@ Observação:
 - ações de sessão usam `loginctl` e `systemctl`
 - screenshot usa `grim`
 - selecao de area usa `slurp`
+- conversao de wallpaper nao-PNG usa `magick`
 
 ## Compilação
 
 ```bash
 zig build
+```
+
+Checks recomendados antes de abrir uma build para teste:
+
+```bash
+scripts/prealpha-check.sh
+```
+
+O script roda build Debug, testes, build `ReleaseSafe`, `git diff --check` e instala a release em um prefixo temporario para validar binarios, assets, docs e metadados `.desktop`.
+
+O build tambem instala assets e metadados de sessao no prefixo:
+
+```text
+share/axia-de/assets/
+bin/axia-session
+share/wayland-sessions/axia-de.desktop
+share/applications/axia-files.desktop
+share/applications/axia-settings.desktop
+share/doc/axia-de/
+```
+
+## Desenvolvimento instalado
+
+Para testar uma sessao instalada sem tocar em `/usr`, use um prefixo temporario:
+
+```bash
+scripts/dev-install.sh
+scripts/dev-session.sh
+```
+
+Por padrao isso usa `/tmp/axia-dev`. Para escolher outro prefixo:
+
+```bash
+AXIA_DEV_PREFIX=/tmp/meu-axia-dev scripts/dev-session.sh
+```
+
+Enquanto a sessao esta aberta, edite o repo normalmente e reinicie componentes individuais:
+
+```bash
+scripts/dev-restart.sh dock
+scripts/dev-restart.sh panel
+scripts/dev-restart.sh settings
+scripts/dev-restart.sh files
+```
+
+`panel` e `dock` sao supervisionados pelo compositor e voltam automaticamente depois do `pkill`. Mudancas em `axia-de` exigem reiniciar a sessao:
+
+```bash
+scripts/dev-restart.sh compositor
 ```
 
 ## Execução
@@ -139,6 +190,10 @@ Também é possível rodar componentes isolados durante desenvolvimento:
 ```bash
 zig build run-panel
 zig build run-dock
+zig build run-launcher
+zig build run-app-grid
+zig build run-files
+zig build run-settings
 ```
 
 ## Wallpaper
@@ -153,6 +208,12 @@ Para sobrescrever na execução:
 
 ```bash
 AXIA_WALLPAPER=/caminho/para/wallpaper.png zig build run
+```
+
+Em builds instalados, os assets sao procurados em `share/axia-de/assets` relativo ao prefixo. Durante desenvolvimento, `assets/` no repositorio continua funcionando. Para sobrescrever o diretorio de assets:
+
+```bash
+AXIA_ASSET_DIR=/caminho/para/assets axia-de
 ```
 
 ## Atalhos
@@ -190,6 +251,8 @@ O roadmap vivo do projeto está em:
 
 - [docs/roadmap.md](docs/roadmap.md)
 - [docs/office-readiness-tasks.md](docs/office-readiness-tasks.md)
+- [docs/smoke-test.md](docs/smoke-test.md)
+- [docs/known-issues.md](docs/known-issues.md)
 
 Documentos técnicos relacionados:
 

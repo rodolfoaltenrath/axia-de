@@ -28,6 +28,7 @@ pub const State = struct {
     preferences: settings_model.PreferencesState = .{},
     runtime: settings_model.RuntimeState = .{},
     scroll_y: f64 = 0,
+    maximized: bool = false,
 };
 
 const NavItem = struct {
@@ -52,7 +53,7 @@ pub fn hitTest(width: u32, height: u32, x: f64, y: f64, state: State) Hit {
     if (closeRect(width).contains(x, y)) return .close;
     if (maximizeRect(width).contains(x, y)) return .maximize;
     if (minimizeRect(width).contains(x, y)) return .minimize;
-    if (titlebarDragRect(width, height).contains(x, y)) return .titlebar;
+    if (titlebarDragRect(width, height, state.maximized).contains(x, y)) return .titlebar;
 
     const sidebar = sidebarRect(width, height);
     for (nav_items, 0..) |item, index| {
@@ -120,6 +121,7 @@ pub fn draw(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
         .title = "Configurações",
         .accent_glyph = "",
         .title_x = 56,
+        .attached_to_edges = state.maximized,
     }, hoveredControl(state.hovered));
     drawTopSettingsIcon(cr);
     drawSidebar(cr, width, height, state.page, state.hovered);
@@ -204,7 +206,7 @@ fn drawContent(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
 fn drawWallpaperPage(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
     for (settings_model.wallpaper_presets, 0..) |preset, index| {
         const rect = wallpaperCardRect(width, height, index);
-        const active = state.current_wallpaper_path != null and std.mem.eql(u8, state.current_wallpaper_path.?, preset.path);
+        const active = state.current_wallpaper_path != null and settings_model.wallpaperPathMatches(state.current_wallpaper_path.?, preset.path);
         const is_hovered = state.hovered == .wallpaper_preset and state.hovered.wallpaper_preset == index;
         drawRoundedRect(cr, rect, 16);
         if (active) {
@@ -453,8 +455,8 @@ fn contentRect(width: u32, height: u32) Rect {
     };
 }
 
-fn titlebarDragRect(width: u32, height: u32) Rect {
-    return chrome.titlebarDragRect(width, height, 120, 120);
+fn titlebarDragRect(width: u32, height: u32, maximized: bool) Rect {
+    return chrome.titlebarDragRectStyled(width, height, 120, 120, maximized);
 }
 
 fn navItemRect(sidebar: Rect, index: usize) Rect {

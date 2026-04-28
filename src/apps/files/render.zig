@@ -69,6 +69,7 @@ pub fn draw(
     dialog_kind: DialogKind,
     dialog_input: []const u8,
     dialog_subject: []const u8,
+    maximized: bool,
 ) void {
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
@@ -78,16 +79,16 @@ pub fn draw(
     c.cairo_paint(cr);
     c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
 
-    const root = rootRect(width, height);
-    const sidebar = sidebarRect(width, height, sidebar_collapsed);
-    const content = contentRect(width, height, sidebar_collapsed);
+    const root = rootRect(width, height, maximized);
+    const sidebar = sidebarRect(width, height, sidebar_collapsed, maximized);
+    const content = contentRect(width, height, sidebar_collapsed, maximized);
 
     _ = root;
-    drawTitlebar(cr, width, height, snapshot, hovered, sidebar_collapsed, picker_mode);
+    drawTitlebar(cr, width, height, snapshot, hovered, sidebar_collapsed, picker_mode, maximized);
     drawSidebar(cr, sidebar, snapshot, hovered, sidebar_collapsed, sidebar_icons);
-    drawContent(cr, width, height, content, snapshot, hovered, sidebar_collapsed, picker_mode);
+    drawContent(cr, width, height, content, snapshot, hovered, sidebar_collapsed, picker_mode, maximized);
     if (dialog_kind != .none) {
-        drawDialog(cr, width, height, dialog_kind, dialog_input, dialog_subject, hovered);
+        drawDialog(cr, width, height, dialog_kind, dialog_input, dialog_subject, hovered, maximized);
     }
 }
 
@@ -100,10 +101,11 @@ pub fn hitTest(
     sidebar_collapsed: bool,
     picker_mode: bool,
     dialog_kind: DialogKind,
+    maximized: bool,
 ) Hit {
     if (dialog_kind != .none) {
-        if (dialogConfirmRect(width, height).contains(x, y)) return .dialog_confirm;
-        if (dialogCancelRect(width, height).contains(x, y)) return .dialog_cancel;
+        if (dialogConfirmRect(width, height, maximized).contains(x, y)) return .dialog_confirm;
+        if (dialogCancelRect(width, height, maximized).contains(x, y)) return .dialog_cancel;
         return .none;
     }
 
@@ -112,17 +114,17 @@ pub fn hitTest(
     if (minimizeRect(width).contains(x, y)) return .minimize;
     if (toggleSidebarRect().contains(x, y)) return .toggle_sidebar;
 
-    if (upRect(width, height, sidebar_collapsed).contains(x, y)) return .up;
-    if (breadcrumbTargetRect(width, height, sidebar_collapsed, snapshot.current_dir).contains(x, y)) return .breadcrumb_up;
-    if (!picker_mode and openSelectedRect(width, height, sidebar_collapsed).contains(x, y)) return .open_selected;
-    if (!picker_mode and newFolderRect(width, height, sidebar_collapsed).contains(x, y)) return .new_folder;
-    if (!picker_mode and renameRect(width, height, sidebar_collapsed).contains(x, y)) return .rename_selected;
-    if (!picker_mode and deleteRect(width, height, sidebar_collapsed).contains(x, y)) return .delete_selected;
-    if (previousRect(width, height, sidebar_collapsed).contains(x, y)) return .previous;
-    if (nextRect(width, height, sidebar_collapsed).contains(x, y)) return .next;
-    if (modifiedHeaderRect(width, height, sidebar_collapsed).contains(x, y)) return .sort_modified;
+    if (upRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .up;
+    if (breadcrumbTargetRect(width, height, sidebar_collapsed, snapshot.current_dir, maximized).contains(x, y)) return .breadcrumb_up;
+    if (!picker_mode and openSelectedRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .open_selected;
+    if (!picker_mode and newFolderRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .new_folder;
+    if (!picker_mode and renameRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .rename_selected;
+    if (!picker_mode and deleteRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .delete_selected;
+    if (previousRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .previous;
+    if (nextRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .next;
+    if (modifiedHeaderRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .sort_modified;
 
-    const sidebar = sidebarRect(width, height, sidebar_collapsed);
+    const sidebar = sidebarRect(width, height, sidebar_collapsed, maximized);
     for (browser.sidebar_items) |item| {
         if (sidebarItemRect(sidebar, item.target).contains(x, y)) {
             return .{ .sidebar = item.target };
@@ -130,17 +132,17 @@ pub fn hitTest(
     }
 
     for (0..snapshot.count) |index| {
-        if (entryRect(width, height, index, sidebar_collapsed).contains(x, y)) {
+        if (entryRect(width, height, index, sidebar_collapsed, maximized).contains(x, y)) {
             return .{ .entry = index };
         }
     }
 
-    if (titlebarDragRect(width, height).contains(x, y)) return .titlebar;
+    if (titlebarDragRect(width, height, maximized).contains(x, y)) return .titlebar;
     return .none;
 }
 
-pub fn scrollRegionRect(width: u32, height: u32, collapsed: bool) Rect {
-    const content = contentRect(width, height, collapsed);
+pub fn scrollRegionRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
+    const content = contentRect(width, height, collapsed, maximized);
     const header_y = content.y + top_strip_height;
     const footer_y = content.y + content.height - footer_height;
     const rows_top = header_y + table_header_height;
@@ -153,16 +155,16 @@ pub fn scrollRegionRect(width: u32, height: u32, collapsed: bool) Rect {
     };
 }
 
-fn rootRect(width: u32, height: u32) Rect {
-    return chrome.rootRect(width, height);
+fn rootRect(width: u32, height: u32, maximized: bool) Rect {
+    return chrome.rootRectStyled(width, height, maximized);
 }
 
 fn sidebarWidth(collapsed: bool) f64 {
     return if (collapsed) sidebar_collapsed_width else sidebar_expanded_width;
 }
 
-fn sidebarRect(width: u32, height: u32, collapsed: bool) Rect {
-    const root = rootRect(width, height);
+fn sidebarRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
+    const root = rootRect(width, height, maximized);
     return .{
         .x = root.x + 12,
         .y = root.y + titlebar_height + 6,
@@ -171,9 +173,9 @@ fn sidebarRect(width: u32, height: u32, collapsed: bool) Rect {
     };
 }
 
-fn contentRect(width: u32, height: u32, collapsed: bool) Rect {
-    const root = rootRect(width, height);
-    const side = sidebarRect(width, height, collapsed);
+fn contentRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
+    const root = rootRect(width, height, maximized);
+    const side = sidebarRect(width, height, collapsed, maximized);
     return .{
         .x = side.x + side.width + 18,
         .y = root.y + titlebar_height + 6,
@@ -182,8 +184,8 @@ fn contentRect(width: u32, height: u32, collapsed: bool) Rect {
     };
 }
 
-fn titlebarDragRect(width: u32, height: u32) Rect {
-    return chrome.titlebarDragRect(width, height, 120, 120);
+fn titlebarDragRect(width: u32, height: u32, maximized: bool) Rect {
+    return chrome.titlebarDragRectStyled(width, height, 120, 120, maximized);
 }
 
 fn toggleSidebarRect() Rect {
@@ -206,18 +208,18 @@ fn closeRect(width: u32) Rect {
     return chrome.closeRect(width);
 }
 
-fn previousRect(width: u32, height: u32, collapsed: bool) Rect {
-    const content = contentRect(width, height, collapsed);
+fn previousRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
+    const content = contentRect(width, height, collapsed, maximized);
     return .{ .x = content.x + 10, .y = content.y + 10, .width = toolbar_button_size, .height = toolbar_button_size };
 }
 
-fn nextRect(width: u32, height: u32, collapsed: bool) Rect {
-    const previous = previousRect(width, height, collapsed);
+fn nextRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
+    const previous = previousRect(width, height, collapsed, maximized);
     return .{ .x = previous.x + previous.width + toolbar_button_gap, .y = previous.y, .width = toolbar_button_size, .height = toolbar_button_size };
 }
 
-fn upRect(width: u32, height: u32, collapsed: bool) Rect {
-    const next = nextRect(width, height, collapsed);
+fn upRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
+    const next = nextRect(width, height, collapsed, maximized);
     return .{ .x = next.x + next.width + toolbar_button_gap, .y = next.y, .width = toolbar_button_size, .height = toolbar_button_size };
 }
 
@@ -231,8 +233,8 @@ fn sidebarItemRect(sidebar: Rect, target: browser.SidebarTarget) Rect {
     };
 }
 
-fn openSelectedRect(width: u32, height: u32, collapsed: bool) Rect {
-    const content = contentRect(width, height, collapsed);
+fn openSelectedRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
+    const content = contentRect(width, height, collapsed, maximized);
     return .{
         .x = content.x + content.width - 84.0,
         .y = content.y + 10,
@@ -241,10 +243,11 @@ fn openSelectedRect(width: u32, height: u32, collapsed: bool) Rect {
     };
 }
 
-fn deleteRect(width: u32, height: u32, collapsed: bool) Rect {
+fn deleteRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     _ = collapsed;
     const total_width = 108.0 + action_button_gap + 92.0;
-    const start_x = (chrome.rootRect(width, height).x + chrome.rootRect(width, height).width / 2.0) - total_width / 2.0;
+    const root = rootRect(width, height, maximized);
+    const start_x = (root.x + root.width / 2.0) - total_width / 2.0;
     return .{
         .x = start_x + 108.0 + action_button_gap,
         .y = 12,
@@ -253,10 +256,11 @@ fn deleteRect(width: u32, height: u32, collapsed: bool) Rect {
     };
 }
 
-fn renameRect(width: u32, height: u32, collapsed: bool) Rect {
+fn renameRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     _ = collapsed;
     const total_width = 108.0 + action_button_gap + 92.0;
-    const start_x = (chrome.rootRect(width, height).x + chrome.rootRect(width, height).width / 2.0) - total_width / 2.0;
+    const root = rootRect(width, height, maximized);
+    const start_x = (root.x + root.width / 2.0) - total_width / 2.0;
     return .{
         .x = start_x,
         .y = 12,
@@ -265,8 +269,8 @@ fn renameRect(width: u32, height: u32, collapsed: bool) Rect {
     };
 }
 
-fn newFolderRect(width: u32, height: u32, collapsed: bool) Rect {
-    const open_button = openSelectedRect(width, height, collapsed);
+fn newFolderRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
+    const open_button = openSelectedRect(width, height, collapsed, maximized);
     return .{
         .x = open_button.x - 118.0 - action_button_gap,
         .y = open_button.y,
@@ -275,8 +279,8 @@ fn newFolderRect(width: u32, height: u32, collapsed: bool) Rect {
     };
 }
 
-fn breadcrumbTargetRect(width: u32, height: u32, collapsed: bool, current_dir: []const u8) Rect {
-    const content = contentRect(width, height, collapsed);
+fn breadcrumbTargetRect(width: u32, height: u32, collapsed: bool, current_dir: []const u8, maximized: bool) Rect {
+    const content = contentRect(width, height, collapsed, maximized);
     const base = basenameLabel(current_dir);
     const estimated_width = @min(220.0, 18.0 + @as(f64, @floatFromInt(base.len)) * 9.0);
     return .{
@@ -287,8 +291,8 @@ fn breadcrumbTargetRect(width: u32, height: u32, collapsed: bool, current_dir: [
     };
 }
 
-fn entryRect(width: u32, height: u32, index: usize, collapsed: bool) Rect {
-    const rows = scrollRegionRect(width, height, collapsed);
+fn entryRect(width: u32, height: u32, index: usize, collapsed: bool, maximized: bool) Rect {
+    const rows = scrollRegionRect(width, height, collapsed, maximized);
     return .{
         .x = rows.x,
         .y = rows.y + @as(f64, @floatFromInt(index)) * row_height,
@@ -297,17 +301,18 @@ fn entryRect(width: u32, height: u32, index: usize, collapsed: bool) Rect {
     };
 }
 
-fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, snapshot: browser.Snapshot, hovered: Hit, sidebar_collapsed: bool, picker_mode: bool) void {
+fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, snapshot: browser.Snapshot, hovered: Hit, sidebar_collapsed: bool, picker_mode: bool, maximized: bool) void {
     chrome.drawWindowShell(cr, width, height, .{
         .title = if (picker_mode) "Selecionar Wallpaper" else "Arquivos",
         .title_x = 86,
+        .attached_to_edges = maximized,
     }, hoveredControl(hovered));
     drawTopGlyphButton(cr, toggleSidebarRect(), "=", hovered == .toggle_sidebar);
     drawTopGlyphButton(cr, appGlyphRect(), if (sidebar_collapsed) ">" else "<", false);
     if (!picker_mode) {
         drawActionButton(
             cr,
-            renameRect(width, height, sidebar_collapsed),
+            renameRect(width, height, sidebar_collapsed, maximized),
             "Renomear",
             snapshot.selected_exists,
             hovered == .rename_selected,
@@ -315,7 +320,7 @@ fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, snapshot: browser.Snaps
         );
         drawActionButton(
             cr,
-            deleteRect(width, height, sidebar_collapsed),
+            deleteRect(width, height, sidebar_collapsed, maximized),
             "Excluir",
             snapshot.selected_exists,
             hovered == .delete_selected,
@@ -375,14 +380,15 @@ fn drawContent(
     hovered: Hit,
     sidebar_collapsed: bool,
     picker_mode: bool,
+    maximized: bool,
 ) void {
-    drawToolbarButton(cr, previousRect(width, height, sidebar_collapsed), "<", hovered == .previous);
-    drawToolbarButton(cr, nextRect(width, height, sidebar_collapsed), ">", hovered == .next);
-    drawToolbarButton(cr, upRect(width, height, sidebar_collapsed), "^", hovered == .up or hovered == .breadcrumb_up);
+    drawToolbarButton(cr, previousRect(width, height, sidebar_collapsed, maximized), "<", hovered == .previous);
+    drawToolbarButton(cr, nextRect(width, height, sidebar_collapsed, maximized), ">", hovered == .next);
+    drawToolbarButton(cr, upRect(width, height, sidebar_collapsed, maximized), "^", hovered == .up or hovered == .breadcrumb_up);
     if (!picker_mode) {
         drawActionButton(
             cr,
-            newFolderRect(width, height, sidebar_collapsed),
+            newFolderRect(width, height, sidebar_collapsed, maximized),
             "Nova pasta",
             true,
             hovered == .new_folder,
@@ -390,14 +396,14 @@ fn drawContent(
         );
         drawActionButton(
             cr,
-            openSelectedRect(width, height, sidebar_collapsed),
+            openSelectedRect(width, height, sidebar_collapsed, maximized),
             "Abrir",
             snapshot.selected_exists,
             hovered == .open_selected,
             .secondary,
         );
     }
-    drawBreadcrumb(cr, width, height, snapshot.current_dir, hovered == .breadcrumb_up, sidebar_collapsed);
+    drawBreadcrumb(cr, width, height, snapshot.current_dir, hovered == .breadcrumb_up, sidebar_collapsed, maximized);
     if (picker_mode) drawPickerHint(cr, content);
 
     const header_y = content.y + top_strip_height;
@@ -411,7 +417,7 @@ fn drawContent(
     if (snapshot.count == 0) {
         drawEmptyState(cr, content, picker_mode);
     } else {
-        const rows_area = scrollRegionRect(width, height, sidebar_collapsed);
+        const rows_area = scrollRegionRect(width, height, sidebar_collapsed, maximized);
         c.cairo_save(cr);
         c.cairo_rectangle(cr, rows_area.x, rows_area.y, rows_area.width, rows_area.height);
         c.cairo_clip(cr);
@@ -499,15 +505,15 @@ fn drawPickerHint(cr: *c.cairo_t, content: Rect) void {
     drawLabel(cr, rect.x + 14, rect.y + 21, 12.5, "Clique numa imagem para aplicar como wallpaper.", 0.82, 0.93, 0.97);
 }
 
-fn drawBreadcrumb(cr: *c.cairo_t, width: u32, height: u32, current_dir: []const u8, hovered: bool, collapsed: bool) void {
-    const content = contentRect(width, height, collapsed);
+fn drawBreadcrumb(cr: *c.cairo_t, width: u32, height: u32, current_dir: []const u8, hovered: bool, collapsed: bool, maximized: bool) void {
+    const content = contentRect(width, height, collapsed, maximized);
     const y = content.y + 30;
     const breadcrumb_x = content.x + 124;
     const separator_x = breadcrumb_x + 92;
     drawLabel(cr, breadcrumb_x, y, 15, "Local atual", 0.70, 0.72, 0.77);
     drawLabel(cr, separator_x, y, 17, "/", 0.86, 0.87, 0.9);
     if (hovered) {
-        const target = breadcrumbTargetRect(width, height, collapsed, current_dir);
+        const target = breadcrumbTargetRect(width, height, collapsed, current_dir, maximized);
         drawRoundedRect(cr, target, 8);
         c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
         c.cairo_fill(cr);
@@ -806,13 +812,13 @@ fn drawActionButton(cr: *c.cairo_t, rect: Rect, label: []const u8, enabled: bool
     }
 }
 
-fn drawDialog(cr: *c.cairo_t, width: u32, height: u32, kind: DialogKind, input: []const u8, subject: []const u8, hovered: Hit) void {
-    const overlay = rootRect(width, height);
+fn drawDialog(cr: *c.cairo_t, width: u32, height: u32, kind: DialogKind, input: []const u8, subject: []const u8, hovered: Hit, maximized: bool) void {
+    const overlay = rootRect(width, height, maximized);
     c.cairo_rectangle(cr, overlay.x, overlay.y, overlay.width, overlay.height);
     c.cairo_set_source_rgba(cr, 0.01, 0.02, 0.04, 0.58);
     c.cairo_fill(cr);
 
-    const card = dialogRect(width, height);
+    const card = dialogRect(width, height, maximized);
     drawRoundedRect(cr, card, 14);
     c.cairo_set_source_rgba(cr, 0.09, 0.10, 0.12, 0.98);
     c.cairo_fill_preserve(cr);
@@ -844,7 +850,7 @@ fn drawDialog(cr: *c.cairo_t, width: u32, height: u32, kind: DialogKind, input: 
         c.cairo_fill(cr);
         drawLabel(cr, subject_rect.x + 14, subject_rect.y + 28, 15, subject, 0.92, 0.93, 0.96);
     } else {
-        const input_rect = dialogInputRect(width, height);
+        const input_rect = dialogInputRect(width, height, maximized);
         drawRoundedRect(cr, input_rect, 10);
         c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
         c.cairo_fill_preserve(cr);
@@ -854,10 +860,10 @@ fn drawDialog(cr: *c.cairo_t, width: u32, height: u32, kind: DialogKind, input: 
         drawLabel(cr, input_rect.x + 14, input_rect.y + 27, 15, if (input.len == 0) "Digite aqui..." else input, if (input.len == 0) 0.54 else 0.94, if (input.len == 0) 0.56 else 0.95, if (input.len == 0) 0.60 else 0.97);
     }
 
-    drawActionButton(cr, dialogCancelRect(width, height), "Cancelar", true, hovered == .dialog_cancel, .secondary);
+    drawActionButton(cr, dialogCancelRect(width, height, maximized), "Cancelar", true, hovered == .dialog_cancel, .secondary);
     drawActionButton(
         cr,
-        dialogConfirmRect(width, height),
+        dialogConfirmRect(width, height, maximized),
         if (kind == .delete_confirm) "Mover" else if (kind == .delete_permanent_confirm) "Excluir" else "Confirmar",
         if (kind == .delete_confirm or kind == .delete_permanent_confirm) true else input.len > 0,
         hovered == .dialog_confirm,
@@ -865,8 +871,8 @@ fn drawDialog(cr: *c.cairo_t, width: u32, height: u32, kind: DialogKind, input: 
     );
 }
 
-fn dialogRect(width: u32, height: u32) Rect {
-    const root = rootRect(width, height);
+fn dialogRect(width: u32, height: u32, maximized: bool) Rect {
+    const root = rootRect(width, height, maximized);
     return .{
         .x = root.x + (root.width - 420) / 2.0,
         .y = root.y + (root.height - 196) / 2.0,
@@ -875,8 +881,8 @@ fn dialogRect(width: u32, height: u32) Rect {
     };
 }
 
-fn dialogInputRect(width: u32, height: u32) Rect {
-    const card = dialogRect(width, height);
+fn dialogInputRect(width: u32, height: u32, maximized: bool) Rect {
+    const card = dialogRect(width, height, maximized);
     return .{
         .x = card.x + 18,
         .y = card.y + 76,
@@ -885,8 +891,8 @@ fn dialogInputRect(width: u32, height: u32) Rect {
     };
 }
 
-fn dialogCancelRect(width: u32, height: u32) Rect {
-    const card = dialogRect(width, height);
+fn dialogCancelRect(width: u32, height: u32, maximized: bool) Rect {
+    const card = dialogRect(width, height, maximized);
     return .{
         .x = card.x + card.width - 214,
         .y = card.y + card.height - 50,
@@ -895,8 +901,8 @@ fn dialogCancelRect(width: u32, height: u32) Rect {
     };
 }
 
-fn dialogConfirmRect(width: u32, height: u32) Rect {
-    const card = dialogRect(width, height);
+fn dialogConfirmRect(width: u32, height: u32, maximized: bool) Rect {
+    const card = dialogRect(width, height, maximized);
     return .{
         .x = card.x + card.width - 112,
         .y = card.y + card.height - 50,
@@ -1040,8 +1046,8 @@ fn basenameLabel(current_dir: []const u8) []const u8 {
     return std.fs.path.basename(current_dir);
 }
 
-fn modifiedHeaderRect(width: u32, height: u32, collapsed: bool) Rect {
-    const content = contentRect(width, height, collapsed);
+fn modifiedHeaderRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
+    const content = contentRect(width, height, collapsed, maximized);
     return .{
         .x = content.x + content.width * 0.46 - 4,
         .y = content.y + top_strip_height + 4,

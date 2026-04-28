@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=Axia-DE
+Comment=Axia desktop environment pre-alpha session
+Exec=axia-session
+TryExec=axia-de
+Type=Application
+DesktopNames=Axia

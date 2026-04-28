@@ -41,8 +41,10 @@ Hoje o projeto ja tem uma base forte:
 - `axia-files` com abrir, criar pasta, renomear, excluir e lixeira
 - audio, bluetooth, rede, bateria e energia no painel
 - notificacoes e toasts basicos
-- grade de aplicativos em implementacao inicial
+- grade de aplicativos funcional em ciclo inicial
 - glass compositor-side para `top-bar` e `dock`
+- supervisao de `panel`, `dock`, `launcher` e `app-grid`
+- assets e metadados de sessao instalaveis pelo build
 
 O que falta agora e transformar esse conjunto em uma experiencia estavel de alpha.
 
@@ -52,9 +54,9 @@ O que falta agora e transformar esse conjunto em uma experiencia estavel de alph
 Estas features sao bloqueadoras de alpha.
 
 ### 1. Sessao e inicializacao
-- garantir spawn confiavel de `panel`, `dock`, `launcher` e `app-grid`
-- evitar duplicacao de processos do shell
-- melhorar recuperacao quando um processo auxiliar cair
+- validar spawn confiavel de `panel`, `dock`, `launcher` e `app-grid` em smoke test
+- validar ausencia de duplicacao de processos do shell
+- validar recuperacao quando um processo auxiliar cair
 - garantir que a sessao suba com layout inicial previsivel
 
 ### 2. Gerenciamento de janelas
@@ -182,7 +184,7 @@ Esses itens fecham a transicao de desenvolvimento para teste controlado.
 - separar o que e gargalo do Axia-DE e o que e interferencia do ambiente hospedeiro
 
 ### 17. QA minimo
-- montar checklist de smoke test da sessao
+- manter checklist de smoke test da sessao em `docs/smoke-test.md`
 - abrir e fechar apps
 - testar dock, painel, launcher e app grid
 - testar workspaces
@@ -193,8 +195,8 @@ Esses itens fecham a transicao de desenvolvimento para teste controlado.
 ### 18. Documentacao de alpha
 - instrucoes de execucao
 - lista do que funciona
-- lista do que ainda e experimental
-- roteiro de teste para feedback
+- lista do que ainda e experimental em `docs/known-issues.md`
+- roteiro de teste para feedback em `docs/smoke-test.md`
 - forma de reportar bugs
 
 ---
@@ -209,8 +211,8 @@ Esta e a ordem que mais faz sentido para chegar no alpha sem dispersao:
 5. fechar fluxo principal do `axia-files`
 6. revisar `configuracoes`
 7. corrigir gargalos de performance do shell
-8. adicionar resiliencia dos processos
-9. montar checklist de QA
+8. validar resiliencia dos processos no smoke test
+9. manter checklist de QA
 10. iniciar rodada de alpha
 
 ---
@@ -228,8 +230,8 @@ Checklist final:
 - [ ] gerenciamento basico de janelas confiavel
 - [ ] glass do shell sem artefatos graves
 - [ ] sem travamentos perceptiveis nas acoes principais
-- [ ] sem duplicacao estranha de processos do shell
-- [ ] smoke test documentado
+- [x] sem duplicacao estranha de processos do shell
+- [x] smoke test documentado
 
 ---
 

@@ -4,6 +4,7 @@ const c = @import("client_wl").c;
 pub const window_margin = 4.0;
 pub const window_radius = 16.0;
 pub const titlebar_height = 46.0;
+pub const attached_bottom_shadow = 10.0;
 
 pub const Rect = struct {
     x: f64,
@@ -34,9 +35,22 @@ pub const TitlebarStyle = struct {
     accent_glyph: []const u8 = "",
     accent_color: [3]f64 = .{ 0.40, 0.95, 1.0 },
     title_x: f64 = 54.0,
+    attached_to_edges: bool = false,
 };
 
 pub fn rootRect(width: u32, height: u32) Rect {
+    return rootRectStyled(width, height, false);
+}
+
+pub fn rootRectStyled(width: u32, height: u32, attached_to_edges: bool) Rect {
+    if (attached_to_edges) {
+        return .{
+            .x = 0,
+            .y = 0,
+            .width = @floatFromInt(width),
+            .height = @max(1.0, @as(f64, @floatFromInt(height)) - attached_bottom_shadow),
+        };
+    }
     return .{
         .x = window_margin,
         .y = window_margin,
@@ -46,11 +60,16 @@ pub fn rootRect(width: u32, height: u32) Rect {
 }
 
 pub fn titlebarRect(width: u32, height: u32) Rect {
-    const root = rootRect(width, height);
+    return titlebarRectStyled(width, height, false);
+}
+
+pub fn titlebarRectStyled(width: u32, height: u32, attached_to_edges: bool) Rect {
+    const root = rootRectStyled(width, height, attached_to_edges);
+    const inset = if (attached_to_edges) @as(f64, 0) else @as(f64, 1);
     return .{
-        .x = root.x + 1,
-        .y = root.y + 1,
-        .width = root.width - 2,
+        .x = root.x + inset,
+        .y = root.y + inset,
+        .width = root.width - inset * 2.0,
         .height = titlebar_height,
     };
 }
@@ -66,12 +85,18 @@ pub fn contentRect(width: u32, height: u32, padding: f64) Rect {
 }
 
 pub fn titlebarDragRect(width: u32, height: u32, left_reserved: f64, right_reserved: f64) Rect {
-    const root = rootRect(width, height);
+    return titlebarDragRectStyled(width, height, left_reserved, right_reserved, false);
+}
+
+pub fn titlebarDragRectStyled(width: u32, height: u32, left_reserved: f64, right_reserved: f64, attached_to_edges: bool) Rect {
+    const root = rootRectStyled(width, height, attached_to_edges);
+    const drag_top_inset = if (attached_to_edges) @as(f64, 0) else @as(f64, 2);
+    const drag_height_adjust = if (attached_to_edges) @as(f64, 0) else @as(f64, 4);
     return .{
         .x = root.x + left_reserved,
-        .y = root.y + 2,
+        .y = root.y + drag_top_inset,
         .width = root.width - left_reserved - right_reserved,
-        .height = titlebar_height - 4,
+        .height = titlebar_height - drag_height_adjust,
     };
 }
 
@@ -91,26 +116,38 @@ pub fn closeRect(width: u32) Rect {
 }
 
 pub fn drawWindowShell(cr: *c.cairo_t, width: u32, height: u32, style: TitlebarStyle, hovered: HoveredControl) void {
-    const root = rootRect(width, height);
-    drawRoundedRect(cr, root, window_radius);
-    c.cairo_set_source_rgba(cr, 0.105, 0.105, 0.11, 0.972);
-    c.cairo_fill_preserve(cr);
-    c.cairo_set_source_rgba(cr, 0.40, 0.95, 1.0, 0.95);
-    c.cairo_set_line_width(cr, 2.0);
-    c.cairo_stroke(cr);
+    const root = rootRectStyled(width, height, style.attached_to_edges);
+    if (style.attached_to_edges) {
+        c.cairo_rectangle(cr, root.x, root.y, root.width, root.height);
+        c.cairo_set_source_rgba(cr, 0.105, 0.105, 0.11, 0.99);
+        c.cairo_fill(cr);
+        drawAttachedBottomShadow(cr, width, height, root);
+    } else {
+        drawRoundedRect(cr, root, window_radius);
+        c.cairo_set_source_rgba(cr, 0.105, 0.105, 0.11, 0.972);
+        c.cairo_fill_preserve(cr);
+        c.cairo_set_source_rgba(cr, 0.40, 0.95, 1.0, 0.95);
+        c.cairo_set_line_width(cr, 2.0);
+        c.cairo_stroke(cr);
 
-    drawRoundedRect(cr, .{
-        .x = root.x + 1.5,
-        .y = root.y + 1.5,
-        .width = root.width - 3.0,
-        .height = root.height - 3.0,
-    }, window_radius - 1.5);
-    c.cairo_set_source_rgba(cr, 1, 1, 1, 0.04);
-    c.cairo_set_line_width(cr, 1.0);
-    c.cairo_stroke(cr);
+        const inner = Rect{
+            .x = root.x + 1.5,
+            .y = root.y + 1.5,
+            .width = root.width - 3.0,
+            .height = root.height - 3.0,
+        };
+        drawRoundedRect(cr, inner, window_radius - 1.5);
+        c.cairo_set_source_rgba(cr, 1, 1, 1, 0.04);
+        c.cairo_set_line_width(cr, 1.0);
+        c.cairo_stroke(cr);
+    }
 
-    const bar = titlebarRect(width, height);
-    drawTopRoundedRect(cr, bar, window_radius - 1.0);
+    const bar = titlebarRectStyled(width, height, style.attached_to_edges);
+    if (style.attached_to_edges) {
+        c.cairo_rectangle(cr, bar.x, bar.y, bar.width, bar.height);
+    } else {
+        drawTopRoundedRect(cr, bar, window_radius - 1.0);
+    }
     c.cairo_set_source_rgba(cr, 0.11, 0.11, 0.115, 1.0);
     c.cairo_fill(cr);
 
@@ -126,6 +163,22 @@ pub fn drawWindowShell(cr: *c.cairo_t, width: u32, height: u32, style: TitlebarS
     drawWindowControl(cr, minimizeRect(width), .minimize, hovered == .minimize);
     drawWindowControl(cr, maximizeRect(width), .maximize, hovered == .maximize);
     drawWindowControl(cr, closeRect(width), .close, hovered == .close);
+}
+
+fn drawAttachedBottomShadow(cr: *c.cairo_t, width: u32, height: u32, root: Rect) void {
+    const surface_height = @as(f64, @floatFromInt(height));
+    const shadow_top = root.y + root.height;
+    const shadow_height = surface_height - shadow_top;
+    if (shadow_height <= 0.5) return;
+
+    const gradient = c.cairo_pattern_create_linear(0, shadow_top, 0, surface_height);
+    defer c.cairo_pattern_destroy(gradient);
+    c.cairo_pattern_add_color_stop_rgba(gradient, 0.0, 0.0, 0.0, 0.0, 0.34);
+    c.cairo_pattern_add_color_stop_rgba(gradient, 0.42, 0.0, 0.0, 0.0, 0.18);
+    c.cairo_pattern_add_color_stop_rgba(gradient, 1.0, 0.0, 0.0, 0.0, 0.0);
+    c.cairo_rectangle(cr, 0, shadow_top, @floatFromInt(width), shadow_height);
+    c.cairo_set_source(cr, gradient);
+    c.cairo_fill(cr);
 }
 
 pub fn drawWindowControl(cr: *c.cairo_t, rect: Rect, kind: WindowControlKind, hovered: bool) void {

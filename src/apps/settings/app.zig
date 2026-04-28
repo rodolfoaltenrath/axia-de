@@ -161,6 +161,7 @@ pub const App = struct {
             .preferences = self.preferences,
             .runtime = self.runtime,
             .scroll_y = self.scroll_y,
+            .maximized = self.maximized,
         });
         c.cairo_surface_flush(buffer.surface);
         c.wl_surface_attach(self.wl_surface.?, buffer.buffer, 0, 0);
@@ -198,6 +199,7 @@ pub const App = struct {
                 .preferences = self.preferences,
                 .runtime = self.runtime,
                 .scroll_y = self.scroll_y,
+                .maximized = self.maximized,
             },
         );
         if (!hitEquals(new_hovered, self.hovered)) {
@@ -621,6 +623,7 @@ fn scrollState(app: *App) render.State {
         .preferences = app.preferences,
         .runtime = app.runtime,
         .scroll_y = app.scroll_y,
+        .maximized = app.maximized,
     };
 }
 

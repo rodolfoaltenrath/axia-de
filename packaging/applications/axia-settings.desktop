@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Axia Settings
+Name[pt_BR]=Configuracoes
+Comment=Configure the Axia desktop session
+Comment[pt_BR]=Configure a sessao desktop Axia
+Exec=axia-settings
+Icon=preferences-system
+Terminal=false
+Type=Application
+Categories=Settings;DesktopSettings;

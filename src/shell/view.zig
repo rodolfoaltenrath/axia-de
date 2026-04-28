@@ -8,8 +8,23 @@ const log = std.log.scoped(.axia_view);
 const frame_margin_px: i32 = 4;
 const titlebar_height_px: i32 = 46;
 const content_inset_px: i32 = 3;
+const attached_bottom_shadow_px: i32 = @intFromFloat(chrome.attached_bottom_shadow);
 const chrome_left_reserved: f64 = 24.0;
 const chrome_right_reserved: f64 = 120.0;
+
+const ChromeMode = enum {
+    none,
+    floating,
+    attached,
+};
+
+const ChromeMetrics = struct {
+    left: i32,
+    right: i32,
+    top: i32,
+    bottom: i32,
+    content_inset: i32,
+};
 
 pub const DestroyCallback = *const fn (?*anyopaque, *View) void;
 pub const RequestMoveCallback = *const fn (?*anyopaque, *View, u32) void;
@@ -268,11 +283,13 @@ pub const View = struct {
     }
 
     pub fn outerWidth(self: *const View) i32 {
-        return self.effectiveWidth() + if (self.compositorChromeVisible()) frame_margin_px * 2 else 0;
+        const metrics = self.chromeMetrics(self.currentChromeMode());
+        return self.effectiveWidth() + metrics.left + metrics.right;
     }
 
     pub fn outerHeight(self: *const View) i32 {
-        return self.effectiveHeight() + if (self.compositorChromeVisible()) frame_margin_px * 2 + titlebar_height_px else 0;
+        const metrics = self.chromeMetrics(self.currentChromeMode());
+        return self.effectiveHeight() + metrics.top + metrics.bottom;
     }
 
     pub fn outerBox(self: *const View) c.struct_wlr_box {
@@ -281,6 +298,25 @@ pub const View = struct {
             .y = self.y,
             .width = self.outerWidth(),
             .height = self.outerHeight(),
+        };
+    }
+
+    pub fn captureBox(self: *const View) ?c.struct_wlr_box {
+        const outer = self.outerBox();
+        const output = self.outputArea();
+
+        const left = @max(outer.x, output.x);
+        const top = @max(outer.y, output.y);
+        const right = @min(outer.x + outer.width, output.x + output.width);
+        const bottom = @min(outer.y + outer.height, output.y + output.height);
+
+        if (right <= left or bottom <= top) return null;
+
+        return .{
+            .x = left,
+            .y = top,
+            .width = right - left,
+            .height = bottom - top,
         };
     }
 
@@ -346,9 +382,28 @@ pub const View = struct {
             return;
         }
 
+        self.maximize();
+    }
+
+    pub fn maximize(self: *View) void {
+        if (self.toplevel.*.current.maximized or self.toplevel.*.requested.maximized) return;
+
         self.restoreCurrentGeometry();
-        const client_box = self.clientBoxForOuter(self.usable_area);
-        self.setPosition(self.usable_area.x, self.usable_area.y);
+        const outer_area = self.attachedOuterArea();
+        self.maximizeToOuterArea(outer_area);
+    }
+
+    pub fn maximizeToUsableArea(self: *View, usable_area: c.struct_wlr_box) void {
+        if (self.toplevel.*.current.maximized or self.toplevel.*.requested.maximized) return;
+
+        self.restoreCurrentGeometry();
+        const outer_area = self.attachedOuterAreaFor(usable_area);
+        self.maximizeToOuterArea(outer_area);
+    }
+
+    fn maximizeToOuterArea(self: *View, outer_area: c.struct_wlr_box) void {
+        const client_box = self.clientBoxForOuterWithMode(outer_area, .attached);
+        self.setPosition(outer_area.x, outer_area.y);
         _ = c.wlr_xdg_toplevel_set_tiled(
             self.toplevel,
             c.WLR_EDGE_TOP | c.WLR_EDGE_BOTTOM | c.WLR_EDGE_LEFT | c.WLR_EDGE_RIGHT,
@@ -372,10 +427,21 @@ pub const View = struct {
         self.usable_area = usable_area;
         if (!self.xdg_surface.*.initialized) return;
 
-        if (self.toplevel.*.current.maximized or self.toplevel.*.current.fullscreen) {
-            self.setPosition(usable_area.x, usable_area.y);
-            _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, usable_area.width, usable_area.height);
-            _ = c.wlr_xdg_toplevel_set_size(self.toplevel, usable_area.width, usable_area.height);
+        if (self.toplevel.*.current.fullscreen) {
+            const output_area = self.outputArea();
+            const client_box = self.clientBoxForOuterWithMode(output_area, .none);
+            self.setPosition(output_area.x, output_area.y);
+            _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, client_box.width, client_box.height);
+            _ = c.wlr_xdg_toplevel_set_size(self.toplevel, client_box.width, client_box.height);
+            return;
+        }
+
+        if (self.toplevel.*.current.maximized) {
+            const outer_area = self.attachedOuterAreaFor(usable_area);
+            const client_box = self.clientBoxForOuterWithMode(outer_area, .attached);
+            self.setPosition(outer_area.x, outer_area.y);
+            _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, client_box.width, client_box.height);
+            _ = c.wlr_xdg_toplevel_set_size(self.toplevel, client_box.width, client_box.height);
             return;
         }
 
@@ -429,9 +495,10 @@ pub const View = struct {
         _ = c.wlr_xdg_toplevel_set_fullscreen(self.toplevel, false);
         _ = c.wlr_xdg_toplevel_set_maximized(self.toplevel, false);
         _ = c.wlr_xdg_toplevel_set_tiled(self.toplevel, edges);
-        _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, rect.width, rect.height);
+        const client_box = self.clientBoxForOuterWithMode(rect, .floating);
+        _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, client_box.width, client_box.height);
         self.setPosition(rect.x, rect.y);
-        _ = c.wlr_xdg_toplevel_set_size(self.toplevel, rect.width, rect.height);
+        _ = c.wlr_xdg_toplevel_set_size(self.toplevel, client_box.width, client_box.height);
     }
 
     fn titleOrFallback(toplevel: [*c]c.struct_wlr_xdg_toplevel) []const u8 {
@@ -568,7 +635,7 @@ pub const View = struct {
             self.restoreCurrentGeometry();
             self.setPosition(output_area.x, output_area.y);
             _ = c.wlr_xdg_toplevel_set_tiled(self.toplevel, 0);
-            const client_box = self.clientBoxForOuter(output_area);
+            const client_box = self.clientBoxForOuterWithMode(output_area, .none);
             _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, client_box.width, client_box.height);
             _ = c.wlr_xdg_toplevel_set_size(self.toplevel, client_box.width, client_box.height);
             _ = c.wlr_xdg_toplevel_set_maximized(self.toplevel, false);
@@ -579,8 +646,9 @@ pub const View = struct {
 
         if (requested.maximized) {
             self.restoreCurrentGeometry();
-            self.setPosition(self.usable_area.x, self.usable_area.y);
-            const client_box = self.clientBoxForOuter(self.usable_area);
+            const outer_area = self.attachedOuterArea();
+            self.setPosition(outer_area.x, outer_area.y);
+            const client_box = self.clientBoxForOuterWithMode(outer_area, .attached);
             _ = c.wlr_xdg_toplevel_set_tiled(
                 self.toplevel,
                 c.WLR_EDGE_TOP | c.WLR_EDGE_BOTTOM | c.WLR_EDGE_LEFT | c.WLR_EDGE_RIGHT,
@@ -644,12 +712,17 @@ pub const View = struct {
     }
 
     fn clientBoxForOuter(self: *const View, outer: c.struct_wlr_box) c.struct_wlr_box {
-        if (!self.compositorChromeVisible()) return outer;
+        return self.clientBoxForOuterWithMode(outer, self.currentChromeMode());
+    }
+
+    fn clientBoxForOuterWithMode(self: *const View, outer: c.struct_wlr_box, mode: ChromeMode) c.struct_wlr_box {
+        const metrics = self.chromeMetrics(mode);
+        if (mode == .none or !self.usesCompositorChrome()) return outer;
         return .{
             .x = outer.x,
             .y = outer.y,
-            .width = @max(outer.width - frame_margin_px * 2, self.minWidth()),
-            .height = @max(outer.height - frame_margin_px * 2 - titlebar_height_px, self.minHeight()),
+            .width = @max(outer.width - metrics.left - metrics.right, self.minWidth()),
+            .height = @max(outer.height - metrics.top - metrics.bottom, self.minHeight()),
         };
     }
 
@@ -657,18 +730,20 @@ pub const View = struct {
         if (self.scene_tree == null) return;
         if (!self.usesCompositorChrome()) return;
 
+        const metrics = self.chromeMetrics(self.currentChromeMode());
+
         if (self.content_tree) |content_tree| {
             var clip = c.struct_wlr_box{
                 .x = 0,
                 .y = 0,
-                .width = @max(self.effectiveWidth() - content_inset_px * 2, 1),
-                .height = @max(self.effectiveHeight() - content_inset_px * 2, 1),
+                .width = @max(self.effectiveWidth() - metrics.content_inset * 2, 1),
+                .height = @max(self.effectiveHeight() - metrics.content_inset * 2, 1),
             };
             c.wlr_scene_subsurface_tree_set_clip(&content_tree.*.node, &clip);
             c.wlr_scene_node_set_position(
                 &content_tree.*.node,
-                if (self.compositorChromeVisible()) frame_margin_px + content_inset_px else 0,
-                if (self.compositorChromeVisible()) frame_margin_px + titlebar_height_px + content_inset_px else 0,
+                metrics.left + metrics.content_inset,
+                metrics.top + metrics.content_inset,
             );
         }
 
@@ -711,10 +786,60 @@ pub const View = struct {
         chrome.drawWindowShell(buffer.cr, buffer.width, buffer.height, .{
             .title = self.title(),
             .title_x = 22.0,
+            .attached_to_edges = self.currentChromeMode() == .attached,
         }, self.chrome_hovered);
         c.cairo_surface_flush(buffer.surface);
         if (self.frame_scene_buffer) |scene_buffer| {
             c.wlr_scene_buffer_set_buffer(scene_buffer, buffer.wlrBuffer());
         }
+    }
+
+    fn currentChromeMode(self: *const View) ChromeMode {
+        if (!self.compositorChromeVisible()) return .none;
+        if (self.toplevel.*.current.maximized or self.toplevel.*.requested.maximized) return .attached;
+        return .floating;
+    }
+
+    fn chromeMetrics(self: *const View, mode: ChromeMode) ChromeMetrics {
+        _ = self;
+        return switch (mode) {
+            .none => .{
+                .left = 0,
+                .right = 0,
+                .top = 0,
+                .bottom = 0,
+                .content_inset = 0,
+            },
+            .floating => .{
+                .left = frame_margin_px,
+                .right = frame_margin_px,
+                .top = frame_margin_px + titlebar_height_px,
+                .bottom = frame_margin_px,
+                .content_inset = content_inset_px,
+            },
+            .attached => .{
+                .left = 0,
+                .right = 0,
+                .top = titlebar_height_px,
+                .bottom = attached_bottom_shadow_px,
+                .content_inset = 0,
+            },
+        };
+    }
+
+    fn attachedOuterArea(self: *const View) c.struct_wlr_box {
+        return self.attachedOuterAreaFor(self.usable_area);
+    }
+
+    fn attachedOuterAreaFor(self: *const View, usable_area: c.struct_wlr_box) c.struct_wlr_box {
+        var outer = usable_area;
+        if (outer.width <= 0 or outer.height <= 0) return outer;
+
+        const output = self.outputArea();
+        const output_bottom = output.y + output.height;
+        const desired_bottom = outer.y + outer.height + attached_bottom_shadow_px;
+        const bottom = @min(output_bottom, desired_bottom);
+        outer.height = @max(1, bottom - outer.y);
+        return outer;
     }
 };

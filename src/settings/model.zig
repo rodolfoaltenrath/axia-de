@@ -1,3 +1,5 @@
+const std = @import("std");
+
 const default_workspace_count: usize = 4;
 
 pub const Page = enum {
@@ -141,6 +143,19 @@ pub const wallpaper_presets = [_]WallpaperPreset{
         },
     },
 };
+
+pub fn wallpaperPathMatches(current_path: []const u8, preset_path: []const u8) bool {
+    if (std.mem.eql(u8, current_path, preset_path)) return true;
+
+    const dev_prefix = "assets/";
+    const relative_preset = if (std.mem.startsWith(u8, preset_path, dev_prefix))
+        preset_path[dev_prefix.len..]
+    else
+        preset_path;
+
+    return std.mem.endsWith(u8, current_path, preset_path) or
+        std.mem.endsWith(u8, current_path, relative_preset);
+}
 
 pub const DisplayInfo = struct {
     name: [48]u8 = [_]u8{0} ** 48,

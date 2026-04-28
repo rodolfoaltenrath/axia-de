@@ -211,6 +211,7 @@ pub const App = struct {
             dialogKindForRender(self.dialog.kind),
             self.dialog.inputText(),
             self.dialog.subjectText(),
+            self.maximized,
         );
         c.cairo_surface_flush(buffer.surface);
         c.wl_surface_attach(self.wl_surface.?, buffer.buffer, 0, 0);
@@ -229,6 +230,7 @@ pub const App = struct {
             self.sidebar_collapsed,
             self.mode == .wallpaper_picker,
             dialogKindForRender(self.dialog.kind),
+            self.maximized,
         );
         if (!hitEquals(new_hovered, self.hovered)) {
             self.hovered = new_hovered;
@@ -237,7 +239,7 @@ pub const App = struct {
     }
 
     fn scrollAtPointer(self: *App, direction: isize) void {
-        if (!render.scrollRegionRect(self.current_width, self.current_height, self.sidebar_collapsed).contains(self.pointer_x, self.pointer_y)) {
+        if (!render.scrollRegionRect(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized).contains(self.pointer_x, self.pointer_y)) {
             return;
         }
         self.browser.scrollLines(direction);
