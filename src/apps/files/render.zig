@@ -63,6 +63,7 @@ pub fn draw(
     height: u32,
     snapshot: browser.Snapshot,
     hovered: Hit,
+    maximized: bool,
     sidebar_collapsed: bool,
     sidebar_icons: *const icons.SidebarIcons,
     picker_mode: bool,
@@ -80,6 +81,7 @@ pub fn draw(
     c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
 
     const root = rootRect(width, height, maximized);
+<<<<<<< HEAD
     const sidebar = sidebarRect(width, height, sidebar_collapsed, maximized);
     const content = contentRect(width, height, sidebar_collapsed, maximized);
 
@@ -89,6 +91,17 @@ pub fn draw(
     drawContent(cr, width, height, content, snapshot, hovered, sidebar_collapsed, picker_mode, maximized);
     if (dialog_kind != .none) {
         drawDialog(cr, width, height, dialog_kind, dialog_input, dialog_subject, hovered, maximized);
+=======
+    const sidebar = sidebarRect(width, height, maximized, sidebar_collapsed);
+    const content = contentRect(width, height, maximized, sidebar_collapsed);
+
+    _ = root;
+    drawTitlebar(cr, width, height, snapshot, hovered, maximized, sidebar_collapsed, picker_mode);
+    drawSidebar(cr, sidebar, snapshot, hovered, sidebar_collapsed, sidebar_icons);
+    drawContent(cr, width, height, content, snapshot, hovered, maximized, sidebar_collapsed, picker_mode);
+    if (dialog_kind != .none) {
+        drawDialog(cr, width, height, maximized, dialog_kind, dialog_input, dialog_subject, hovered);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     }
 }
 
@@ -98,6 +111,7 @@ pub fn hitTest(
     x: f64,
     y: f64,
     snapshot: browser.Snapshot,
+    maximized: bool,
     sidebar_collapsed: bool,
     picker_mode: bool,
     dialog_kind: DialogKind,
@@ -109,11 +123,12 @@ pub fn hitTest(
         return .none;
     }
 
-    if (closeRect(width).contains(x, y)) return .close;
-    if (maximizeRect(width).contains(x, y)) return .maximize;
-    if (minimizeRect(width).contains(x, y)) return .minimize;
+    if (closeRect(width, maximized).contains(x, y)) return .close;
+    if (maximizeRect(width, maximized).contains(x, y)) return .maximize;
+    if (minimizeRect(width, maximized).contains(x, y)) return .minimize;
     if (toggleSidebarRect().contains(x, y)) return .toggle_sidebar;
 
+<<<<<<< HEAD
     if (upRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .up;
     if (breadcrumbTargetRect(width, height, sidebar_collapsed, snapshot.current_dir, maximized).contains(x, y)) return .breadcrumb_up;
     if (!picker_mode and openSelectedRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .open_selected;
@@ -125,6 +140,19 @@ pub fn hitTest(
     if (modifiedHeaderRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .sort_modified;
 
     const sidebar = sidebarRect(width, height, sidebar_collapsed, maximized);
+=======
+    if (upRect(width, height, maximized, sidebar_collapsed).contains(x, y)) return .up;
+    if (breadcrumbTargetRect(width, height, maximized, sidebar_collapsed, snapshot.current_dir).contains(x, y)) return .breadcrumb_up;
+    if (!picker_mode and openSelectedRect(width, height, maximized, sidebar_collapsed).contains(x, y)) return .open_selected;
+    if (!picker_mode and newFolderRect(width, height, maximized, sidebar_collapsed).contains(x, y)) return .new_folder;
+    if (!picker_mode and renameRect(width, height, maximized, sidebar_collapsed).contains(x, y)) return .rename_selected;
+    if (!picker_mode and deleteRect(width, height, maximized, sidebar_collapsed).contains(x, y)) return .delete_selected;
+    if (previousRect(width, height, maximized, sidebar_collapsed).contains(x, y)) return .previous;
+    if (nextRect(width, height, maximized, sidebar_collapsed).contains(x, y)) return .next;
+    if (modifiedHeaderRect(width, height, maximized, sidebar_collapsed).contains(x, y)) return .sort_modified;
+
+    const sidebar = sidebarRect(width, height, maximized, sidebar_collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     for (browser.sidebar_items) |item| {
         if (sidebarItemRect(sidebar, item.target).contains(x, y)) {
             return .{ .sidebar = item.target };
@@ -132,7 +160,11 @@ pub fn hitTest(
     }
 
     for (0..snapshot.count) |index| {
+<<<<<<< HEAD
         if (entryRect(width, height, index, sidebar_collapsed, maximized).contains(x, y)) {
+=======
+        if (entryRect(width, height, index, maximized, sidebar_collapsed).contains(x, y)) {
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             return .{ .entry = index };
         }
     }
@@ -141,8 +173,13 @@ pub fn hitTest(
     return .none;
 }
 
+<<<<<<< HEAD
 pub fn scrollRegionRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     const content = contentRect(width, height, collapsed, maximized);
+=======
+pub fn scrollRegionRect(width: u32, height: u32, maximized: bool, collapsed: bool) Rect {
+    const content = contentRect(width, height, maximized, collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     const header_y = content.y + top_strip_height;
     const footer_y = content.y + content.height - footer_height;
     const rows_top = header_y + table_header_height;
@@ -156,14 +193,22 @@ pub fn scrollRegionRect(width: u32, height: u32, collapsed: bool, maximized: boo
 }
 
 fn rootRect(width: u32, height: u32, maximized: bool) Rect {
+<<<<<<< HEAD
     return chrome.rootRectStyled(width, height, maximized);
+=======
+    return chrome.rootRectForMode(width, height, maximized);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
 }
 
 fn sidebarWidth(collapsed: bool) f64 {
     return if (collapsed) sidebar_collapsed_width else sidebar_expanded_width;
 }
 
+<<<<<<< HEAD
 fn sidebarRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
+=======
+fn sidebarRect(width: u32, height: u32, maximized: bool, collapsed: bool) Rect {
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     const root = rootRect(width, height, maximized);
     return .{
         .x = root.x + 12,
@@ -173,9 +218,15 @@ fn sidebarRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     };
 }
 
+<<<<<<< HEAD
 fn contentRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     const root = rootRect(width, height, maximized);
     const side = sidebarRect(width, height, collapsed, maximized);
+=======
+fn contentRect(width: u32, height: u32, maximized: bool, collapsed: bool) Rect {
+    const root = rootRect(width, height, maximized);
+    const side = sidebarRect(width, height, maximized, collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     return .{
         .x = side.x + side.width + 18,
         .y = root.y + titlebar_height + 6,
@@ -185,7 +236,11 @@ fn contentRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
 }
 
 fn titlebarDragRect(width: u32, height: u32, maximized: bool) Rect {
+<<<<<<< HEAD
     return chrome.titlebarDragRectStyled(width, height, 120, 120, maximized);
+=======
+    return chrome.titlebarDragRectForMode(width, height, 120, 120, maximized);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
 }
 
 fn toggleSidebarRect() Rect {
@@ -196,18 +251,19 @@ fn appGlyphRect() Rect {
     return .{ .x = 52, .y = 18, .width = 18, .height = 18 };
 }
 
-fn minimizeRect(width: u32) Rect {
-    return chrome.minimizeRect(width);
+fn minimizeRect(width: u32, maximized: bool) Rect {
+    return chrome.minimizeRectForMode(width, maximized);
 }
 
-fn maximizeRect(width: u32) Rect {
-    return chrome.maximizeRect(width);
+fn maximizeRect(width: u32, maximized: bool) Rect {
+    return chrome.maximizeRectForMode(width, maximized);
 }
 
-fn closeRect(width: u32) Rect {
-    return chrome.closeRect(width);
+fn closeRect(width: u32, maximized: bool) Rect {
+    return chrome.closeRectForMode(width, maximized);
 }
 
+<<<<<<< HEAD
 fn previousRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     const content = contentRect(width, height, collapsed, maximized);
     return .{ .x = content.x + 10, .y = content.y + 10, .width = toolbar_button_size, .height = toolbar_button_size };
@@ -220,6 +276,20 @@ fn nextRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
 
 fn upRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     const next = nextRect(width, height, collapsed, maximized);
+=======
+fn previousRect(width: u32, height: u32, maximized: bool, collapsed: bool) Rect {
+    const content = contentRect(width, height, maximized, collapsed);
+    return .{ .x = content.x + 10, .y = content.y + 10, .width = toolbar_button_size, .height = toolbar_button_size };
+}
+
+fn nextRect(width: u32, height: u32, maximized: bool, collapsed: bool) Rect {
+    const previous = previousRect(width, height, maximized, collapsed);
+    return .{ .x = previous.x + previous.width + toolbar_button_gap, .y = previous.y, .width = toolbar_button_size, .height = toolbar_button_size };
+}
+
+fn upRect(width: u32, height: u32, maximized: bool, collapsed: bool) Rect {
+    const next = nextRect(width, height, maximized, collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     return .{ .x = next.x + next.width + toolbar_button_gap, .y = next.y, .width = toolbar_button_size, .height = toolbar_button_size };
 }
 
@@ -233,8 +303,13 @@ fn sidebarItemRect(sidebar: Rect, target: browser.SidebarTarget) Rect {
     };
 }
 
+<<<<<<< HEAD
 fn openSelectedRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     const content = contentRect(width, height, collapsed, maximized);
+=======
+fn openSelectedRect(width: u32, height: u32, maximized: bool, collapsed: bool) Rect {
+    const content = contentRect(width, height, maximized, collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     return .{
         .x = content.x + content.width - 84.0,
         .y = content.y + 10,
@@ -243,10 +318,17 @@ fn openSelectedRect(width: u32, height: u32, collapsed: bool, maximized: bool) R
     };
 }
 
+<<<<<<< HEAD
 fn deleteRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     _ = collapsed;
     const total_width = 108.0 + action_button_gap + 92.0;
     const root = rootRect(width, height, maximized);
+=======
+fn deleteRect(width: u32, height: u32, maximized: bool, collapsed: bool) Rect {
+    _ = collapsed;
+    const total_width = 108.0 + action_button_gap + 92.0;
+    const root = chrome.rootRectForMode(width, height, maximized);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     const start_x = (root.x + root.width / 2.0) - total_width / 2.0;
     return .{
         .x = start_x + 108.0 + action_button_gap,
@@ -256,10 +338,17 @@ fn deleteRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     };
 }
 
+<<<<<<< HEAD
 fn renameRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     _ = collapsed;
     const total_width = 108.0 + action_button_gap + 92.0;
     const root = rootRect(width, height, maximized);
+=======
+fn renameRect(width: u32, height: u32, maximized: bool, collapsed: bool) Rect {
+    _ = collapsed;
+    const total_width = 108.0 + action_button_gap + 92.0;
+    const root = chrome.rootRectForMode(width, height, maximized);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     const start_x = (root.x + root.width / 2.0) - total_width / 2.0;
     return .{
         .x = start_x,
@@ -269,8 +358,13 @@ fn renameRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     };
 }
 
+<<<<<<< HEAD
 fn newFolderRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     const open_button = openSelectedRect(width, height, collapsed, maximized);
+=======
+fn newFolderRect(width: u32, height: u32, maximized: bool, collapsed: bool) Rect {
+    const open_button = openSelectedRect(width, height, maximized, collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     return .{
         .x = open_button.x - 118.0 - action_button_gap,
         .y = open_button.y,
@@ -279,8 +373,13 @@ fn newFolderRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect
     };
 }
 
+<<<<<<< HEAD
 fn breadcrumbTargetRect(width: u32, height: u32, collapsed: bool, current_dir: []const u8, maximized: bool) Rect {
     const content = contentRect(width, height, collapsed, maximized);
+=======
+fn breadcrumbTargetRect(width: u32, height: u32, maximized: bool, collapsed: bool, current_dir: []const u8) Rect {
+    const content = contentRect(width, height, maximized, collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     const base = basenameLabel(current_dir);
     const estimated_width = @min(220.0, 18.0 + @as(f64, @floatFromInt(base.len)) * 9.0);
     return .{
@@ -291,8 +390,13 @@ fn breadcrumbTargetRect(width: u32, height: u32, collapsed: bool, current_dir: [
     };
 }
 
+<<<<<<< HEAD
 fn entryRect(width: u32, height: u32, index: usize, collapsed: bool, maximized: bool) Rect {
     const rows = scrollRegionRect(width, height, collapsed, maximized);
+=======
+fn entryRect(width: u32, height: u32, index: usize, maximized: bool, collapsed: bool) Rect {
+    const rows = scrollRegionRect(width, height, maximized, collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     return .{
         .x = rows.x,
         .y = rows.y + @as(f64, @floatFromInt(index)) * row_height,
@@ -301,18 +405,30 @@ fn entryRect(width: u32, height: u32, index: usize, collapsed: bool, maximized: 
     };
 }
 
+<<<<<<< HEAD
 fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, snapshot: browser.Snapshot, hovered: Hit, sidebar_collapsed: bool, picker_mode: bool, maximized: bool) void {
     chrome.drawWindowShell(cr, width, height, .{
         .title = if (picker_mode) "Selecionar Wallpaper" else "Arquivos",
         .title_x = 86,
         .attached_to_edges = maximized,
+=======
+fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, snapshot: browser.Snapshot, hovered: Hit, maximized: bool, sidebar_collapsed: bool, picker_mode: bool) void {
+    chrome.drawWindowShell(cr, width, height, .{
+        .title = if (picker_mode) "Selecionar Wallpaper" else "Arquivos",
+        .title_x = 86,
+        .maximized = maximized,
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     }, hoveredControl(hovered));
     drawTopGlyphButton(cr, toggleSidebarRect(), "=", hovered == .toggle_sidebar);
     drawTopGlyphButton(cr, appGlyphRect(), if (sidebar_collapsed) ">" else "<", false);
     if (!picker_mode) {
         drawActionButton(
             cr,
+<<<<<<< HEAD
             renameRect(width, height, sidebar_collapsed, maximized),
+=======
+            renameRect(width, height, maximized, sidebar_collapsed),
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             "Renomear",
             snapshot.selected_exists,
             hovered == .rename_selected,
@@ -320,7 +436,11 @@ fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, snapshot: browser.Snaps
         );
         drawActionButton(
             cr,
+<<<<<<< HEAD
             deleteRect(width, height, sidebar_collapsed, maximized),
+=======
+            deleteRect(width, height, maximized, sidebar_collapsed),
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             "Excluir",
             snapshot.selected_exists,
             hovered == .delete_selected,
@@ -378,10 +498,12 @@ fn drawContent(
     content: Rect,
     snapshot: browser.Snapshot,
     hovered: Hit,
+    maximized: bool,
     sidebar_collapsed: bool,
     picker_mode: bool,
     maximized: bool,
 ) void {
+<<<<<<< HEAD
     drawToolbarButton(cr, previousRect(width, height, sidebar_collapsed, maximized), "<", hovered == .previous);
     drawToolbarButton(cr, nextRect(width, height, sidebar_collapsed, maximized), ">", hovered == .next);
     drawToolbarButton(cr, upRect(width, height, sidebar_collapsed, maximized), "^", hovered == .up or hovered == .breadcrumb_up);
@@ -389,6 +511,15 @@ fn drawContent(
         drawActionButton(
             cr,
             newFolderRect(width, height, sidebar_collapsed, maximized),
+=======
+    drawToolbarButton(cr, previousRect(width, height, maximized, sidebar_collapsed), "<", hovered == .previous);
+    drawToolbarButton(cr, nextRect(width, height, maximized, sidebar_collapsed), ">", hovered == .next);
+    drawToolbarButton(cr, upRect(width, height, maximized, sidebar_collapsed), "^", hovered == .up or hovered == .breadcrumb_up);
+    if (!picker_mode) {
+        drawActionButton(
+            cr,
+            newFolderRect(width, height, maximized, sidebar_collapsed),
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             "Nova pasta",
             true,
             hovered == .new_folder,
@@ -396,14 +527,22 @@ fn drawContent(
         );
         drawActionButton(
             cr,
+<<<<<<< HEAD
             openSelectedRect(width, height, sidebar_collapsed, maximized),
+=======
+            openSelectedRect(width, height, maximized, sidebar_collapsed),
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             "Abrir",
             snapshot.selected_exists,
             hovered == .open_selected,
             .secondary,
         );
     }
+<<<<<<< HEAD
     drawBreadcrumb(cr, width, height, snapshot.current_dir, hovered == .breadcrumb_up, sidebar_collapsed, maximized);
+=======
+    drawBreadcrumb(cr, width, height, snapshot.current_dir, hovered == .breadcrumb_up, maximized, sidebar_collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     if (picker_mode) drawPickerHint(cr, content);
 
     const header_y = content.y + top_strip_height;
@@ -417,7 +556,11 @@ fn drawContent(
     if (snapshot.count == 0) {
         drawEmptyState(cr, content, picker_mode);
     } else {
+<<<<<<< HEAD
         const rows_area = scrollRegionRect(width, height, sidebar_collapsed, maximized);
+=======
+        const rows_area = scrollRegionRect(width, height, maximized, sidebar_collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
         c.cairo_save(cr);
         c.cairo_rectangle(cr, rows_area.x, rows_area.y, rows_area.width, rows_area.height);
         c.cairo_clip(cr);
@@ -505,15 +648,24 @@ fn drawPickerHint(cr: *c.cairo_t, content: Rect) void {
     drawLabel(cr, rect.x + 14, rect.y + 21, 12.5, "Clique numa imagem para aplicar como wallpaper.", 0.82, 0.93, 0.97);
 }
 
+<<<<<<< HEAD
 fn drawBreadcrumb(cr: *c.cairo_t, width: u32, height: u32, current_dir: []const u8, hovered: bool, collapsed: bool, maximized: bool) void {
     const content = contentRect(width, height, collapsed, maximized);
+=======
+fn drawBreadcrumb(cr: *c.cairo_t, width: u32, height: u32, current_dir: []const u8, hovered: bool, maximized: bool, collapsed: bool) void {
+    const content = contentRect(width, height, maximized, collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     const y = content.y + 30;
     const breadcrumb_x = content.x + 124;
     const separator_x = breadcrumb_x + 92;
     drawLabel(cr, breadcrumb_x, y, 15, "Local atual", 0.70, 0.72, 0.77);
     drawLabel(cr, separator_x, y, 17, "/", 0.86, 0.87, 0.9);
     if (hovered) {
+<<<<<<< HEAD
         const target = breadcrumbTargetRect(width, height, collapsed, current_dir, maximized);
+=======
+        const target = breadcrumbTargetRect(width, height, maximized, collapsed, current_dir);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
         drawRoundedRect(cr, target, 8);
         c.cairo_set_source_rgba(cr, 1, 1, 1, 0.05);
         c.cairo_fill(cr);
@@ -812,7 +964,11 @@ fn drawActionButton(cr: *c.cairo_t, rect: Rect, label: []const u8, enabled: bool
     }
 }
 
+<<<<<<< HEAD
 fn drawDialog(cr: *c.cairo_t, width: u32, height: u32, kind: DialogKind, input: []const u8, subject: []const u8, hovered: Hit, maximized: bool) void {
+=======
+fn drawDialog(cr: *c.cairo_t, width: u32, height: u32, maximized: bool, kind: DialogKind, input: []const u8, subject: []const u8, hovered: Hit) void {
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     const overlay = rootRect(width, height, maximized);
     c.cairo_rectangle(cr, overlay.x, overlay.y, overlay.width, overlay.height);
     c.cairo_set_source_rgba(cr, 0.01, 0.02, 0.04, 0.58);
@@ -1046,8 +1202,13 @@ fn basenameLabel(current_dir: []const u8) []const u8 {
     return std.fs.path.basename(current_dir);
 }
 
+<<<<<<< HEAD
 fn modifiedHeaderRect(width: u32, height: u32, collapsed: bool, maximized: bool) Rect {
     const content = contentRect(width, height, collapsed, maximized);
+=======
+fn modifiedHeaderRect(width: u32, height: u32, maximized: bool, collapsed: bool) Rect {
+    const content = contentRect(width, height, maximized, collapsed);
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     return .{
         .x = content.x + content.width * 0.46 - 4,
         .y = content.y + top_strip_height + 4,

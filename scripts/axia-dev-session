@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+COMPOSITOR_PID=""
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+CANARY_CONFIG_HOME="${ROOT_DIR}/dev/canary"
+DEFAULT_V2_SHELL_CMD="./shell-v2/scripts/run-shell-suite.sh"
+LOG_FILE=""
+
+cleanup() {
+  if [[ -n "${COMPOSITOR_PID}" ]] && kill -0 "${COMPOSITOR_PID}" 2>/dev/null; then
+    kill "${COMPOSITOR_PID}" 2>/dev/null || true
+    wait "${COMPOSITOR_PID}" 2>/dev/null || true
+  fi
+  if [[ -n "${LOG_FILE}" && -f "${LOG_FILE}" ]]; then
+    rm -f "${LOG_FILE}"
+  fi
+}
+
+trap cleanup EXIT INT TERM
+
+cd "${ROOT_DIR}"
+export XDG_CONFIG_HOME="${CANARY_CONFIG_HOME}"
+export XDG_CURRENT_DESKTOP="Axia"
+export AXIA_SHELL_MODE="canary"
+
+if [[ -z "${AXIA_EXTERNAL_SHELL_CMD:-}" && -x "${ROOT_DIR}/shell-v2/scripts/run-shell-suite.sh" ]]; then
+  export AXIA_EXTERNAL_SHELL_CMD="${DEFAULT_V2_SHELL_CMD}"
+fi
+
+mkdir -p "${CANARY_CONFIG_HOME}"
+LOG_FILE="$(mktemp "${RUNTIME_DIR%/}/axia-dev-session.XXXXXX.log")"
+zig build >/dev/null
+zig build run >"${LOG_FILE}" 2>&1 &
+COMPOSITOR_PID=$!
+
+for _ in $(seq 1 50); do
+  if [[ -f "${LOG_FILE}" ]]; then
+    SOCKET_LINE="$(grep -Eo 'Wayland socket ready at [^[:space:]]+' "${LOG_FILE}" | tail -n 1 || true)"
+    if [[ -n "${SOCKET_LINE}" ]]; then
+      export WAYLAND_DISPLAY="${SOCKET_LINE##* }"
+      break
+    fi
+  fi
+  if ! kill -0 "${COMPOSITOR_PID}" 2>/dev/null; then
+    echo "O compositor encerrou antes da sessao canario ficar pronta." >&2
+    [[ -f "${LOG_FILE}" ]] && cat "${LOG_FILE}" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+
+if [[ -z "${WAYLAND_DISPLAY:-}" ]]; then
+  echo "Nao foi possivel detectar WAYLAND_DISPLAY para a sessao canario." >&2
+  exit 1
+fi
+
+if [[ -z "${AXIA_IPC_SOCKET:-}" ]]; then
+  RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+  export AXIA_IPC_SOCKET="${RUNTIME_DIR%/}/axia-${WAYLAND_DISPLAY}.sock"
+fi
+
+echo "Sessao canario em WAYLAND_DISPLAY=${WAYLAND_DISPLAY}"
+
+if [[ -n "${AXIA_EXTERNAL_SHELL_CMD:-}" ]]; then
+  echo "shell externa gerenciada pelo compositor: ${AXIA_EXTERNAL_SHELL_CMD}"
+fi
+
+start_if_available() {
+  local bin="$1"
+  shift
+  if command -v "${bin}" >/dev/null 2>&1; then
+    "${bin}" "$@" >/dev/null 2>&1 &
+    echo "subido: ${bin}"
+  else
+    echo "faltando: ${bin}"
+  fi
+}
+
+if [[ -z "${AXIA_EXTERNAL_SHELL_CMD:-}" ]] && command -v waybar >/dev/null 2>&1; then
+  start_if_available waybar \
+    -c "${CANARY_CONFIG_HOME}/waybar/config.jsonc" \
+    -s "${CANARY_CONFIG_HOME}/waybar/style.css"
+elif [[ -z "${AXIA_EXTERNAL_SHELL_CMD:-}" ]]; then
+  echo "faltando: waybar"
+fi
+
+if [[ -z "${AXIA_EXTERNAL_SHELL_CMD:-}" ]] && command -v mako >/dev/null 2>&1; then
+  start_if_available mako --config "${CANARY_CONFIG_HOME}/mako/config"
+elif [[ -z "${AXIA_EXTERNAL_SHELL_CMD:-}" ]]; then
+  echo "faltando: mako"
+fi
+
+if command -v foot >/dev/null 2>&1; then
+  start_if_available foot
+else
+  echo "faltando: foot"
+fi
+
+cat <<'EOF'
+
+Clientes opcionais para rodar manualmente:
+
+  fuzzel --config "${XDG_CONFIG_HOME}/fuzzel/fuzzel.ini"
+  swaylock -f -c 0f1726
+  wlr-randr
+  grim /tmp/axia-shot.png
+  grim -g "$(slurp)" /tmp/axia-region.png
+
+Consulte docs/testing-session.md para o roteiro de smoke test.
+Pressione Ctrl+C para encerrar a sessao.
+EOF
+
+wait "${COMPOSITOR_PID}"

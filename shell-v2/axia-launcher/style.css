@@ -1,0 +1,55 @@
+.launcher-root {
+  background: rgba(16, 18, 24, 0.92);
+  border-radius: 18px;
+  padding: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #e6e9ef;
+  font-family: "Cantarell", "Noto Sans", sans-serif;
+}
+
+.launcher-search {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 8px 12px;
+  color: #e6e9ef;
+}
+
+.section-title {
+  font-size: 13px;
+  color: #b4bbc8;
+}
+
+.app-tile {
+  min-width: 84px;
+  min-height: 90px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.app-tile:hover {
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.app-tile-label {
+  font-size: 11px;
+  color: #dbe0ea;
+}
+
+.launcher-menu {
+  background: rgba(18, 20, 26, 0.96);
+  border-radius: 12px;
+  padding: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.launcher-menu-button {
+  background: transparent;
+  padding: 6px 10px;
+  border-radius: 10px;
+  color: #d7dde8;
+}
+
+.launcher-menu-button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}

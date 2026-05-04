@@ -7,6 +7,8 @@ const ButtonCallback = @import("pointer.zig").ButtonCallback;
 const log = std.log.scoped(.axia_input);
 
 pub const ShortcutCallback = *const fn (?*anyopaque, u32, c.xkb_keysym_t) bool;
+pub const ActivityCallback = *const fn (?*anyopaque) void;
+pub const ShortcutAllowedCallback = *const fn (?*anyopaque) bool;
 
 const Keyboard = struct {
     manager: *InputManager,
@@ -75,6 +77,7 @@ const Keyboard = struct {
 
     fn handleModifiers(listener: [*c]c.struct_wl_listener, _: ?*anyopaque) callconv(.c) void {
         const keyboard: *Keyboard = @ptrCast(@as(*allowzero Keyboard, @fieldParentPtr("modifiers", listener)));
+        keyboard.manager.notifyActivity();
         keyboard.manager.current_modifiers = c.wlr_keyboard_get_modifiers(keyboard.keyboard);
         c.wlr_seat_set_keyboard(keyboard.manager.seat, keyboard.keyboard);
         c.wlr_seat_keyboard_notify_modifiers(keyboard.manager.seat, &keyboard.keyboard.*.modifiers);
@@ -84,6 +87,7 @@ const Keyboard = struct {
         const keyboard: *Keyboard = @ptrCast(@as(*allowzero Keyboard, @fieldParentPtr("key", listener)));
         const raw_event = data orelse return;
         const event: *c.struct_wlr_keyboard_key_event = @ptrCast(@alignCast(raw_event));
+        keyboard.manager.notifyActivity();
 
         const translated_keycode = event.keycode + 8;
         var syms: [*c]const c.xkb_keysym_t = undefined;
@@ -98,18 +102,18 @@ const Keyboard = struct {
             const modifiers = c.wlr_keyboard_get_modifiers(keyboard.keyboard);
             keyboard.manager.current_modifiers = modifiers;
             const slice = syms[0..@intCast(syms_len)];
-            for (slice) |sym| {
-                if (keyboard.manager.shortcut_cb) |callback| {
-                    if (callback(keyboard.manager.shortcut_ctx, modifiers, sym)) {
-                        handled = true;
-                        break;
+            const shortcuts_allowed = if (keyboard.manager.shortcut_allowed_cb) |allowed_cb|
+                allowed_cb(keyboard.manager.shortcut_allowed_ctx)
+            else
+                true;
+            if (shortcuts_allowed) {
+                for (slice) |sym| {
+                    if (keyboard.manager.shortcut_cb) |callback| {
+                        if (callback(keyboard.manager.shortcut_ctx, modifiers, sym)) {
+                            handled = true;
+                            break;
+                        }
                     }
-                }
-                if (sym == c.XKB_KEY_Escape) {
-                    log.info("Escape pressed, terminating Axia-DE", .{});
-                    c.wl_display_terminate(keyboard.manager.display);
-                    handled = true;
-                    break;
                 }
             }
         }
@@ -141,6 +145,10 @@ pub const InputManager = struct {
     listeners_ready: bool = false,
     shortcut_ctx: ?*anyopaque = null,
     shortcut_cb: ?ShortcutCallback = null,
+    shortcut_allowed_ctx: ?*anyopaque = null,
+    shortcut_allowed_cb: ?ShortcutAllowedCallback = null,
+    activity_ctx: ?*anyopaque = null,
+    activity_cb: ?ActivityCallback = null,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -168,6 +176,7 @@ pub const InputManager = struct {
         c.wl_signal_add(&backend.*.events.new_input, &self.new_input);
         self.listeners_ready = true;
         self.pointer.setCapabilitiesNotifier(self, capabilitiesChanged);
+        self.pointer.setActivityNotifier(self, pointerActivityChanged);
         self.pointer.setupListeners();
     }
 
@@ -187,6 +196,24 @@ pub const InputManager = struct {
     ) void {
         self.shortcut_ctx = ctx;
         self.shortcut_cb = callback;
+    }
+
+    pub fn setShortcutAllowedCallback(
+        self: *InputManager,
+        ctx: ?*anyopaque,
+        callback: ShortcutAllowedCallback,
+    ) void {
+        self.shortcut_allowed_ctx = ctx;
+        self.shortcut_allowed_cb = callback;
+    }
+
+    pub fn setActivityNotifier(
+        self: *InputManager,
+        ctx: ?*anyopaque,
+        callback: ActivityCallback,
+    ) void {
+        self.activity_ctx = ctx;
+        self.activity_cb = callback;
     }
 
     pub fn currentModifiers(self: *const InputManager) u32 {
@@ -265,5 +292,17 @@ pub const InputManager = struct {
         const raw_manager = ctx orelse return;
         const manager: *InputManager = @ptrCast(@alignCast(raw_manager));
         manager.updateCapabilities();
+    }
+
+    fn notifyActivity(self: *InputManager) void {
+        if (self.activity_cb) |callback| {
+            callback(self.activity_ctx);
+        }
+    }
+
+    fn pointerActivityChanged(ctx: ?*anyopaque) void {
+        const raw_manager = ctx orelse return;
+        const manager: *InputManager = @ptrCast(@alignCast(raw_manager));
+        manager.notifyActivity();
     }
 };

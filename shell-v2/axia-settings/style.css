@@ -1,0 +1,36 @@
+.settings-root {
+  background: #0d0f14;
+  color: #e6e9ef;
+  font-family: "Cantarell", "Noto Sans", sans-serif;
+}
+
+.settings-header {
+  padding-bottom: 12px;
+}
+
+.settings-title {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.settings-subtitle {
+  font-size: 13px;
+  color: #a0a7b4;
+}
+
+.settings-card {
+  padding: 16px;
+  border-radius: 14px;
+  background: #151a22;
+  border: 1px solid #1f2530;
+}
+
+.settings-card-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.settings-card-body {
+  font-size: 13px;
+  color: #aab2c1;
+}

@@ -205,6 +205,7 @@ pub const App = struct {
             self.current_height,
             self.browser.snapshot(),
             self.hovered,
+            self.maximized,
             self.sidebar_collapsed,
             &self.icons,
             self.mode == .wallpaper_picker,
@@ -227,6 +228,7 @@ pub const App = struct {
             self.pointer_x,
             self.pointer_y,
             self.browser.snapshot(),
+            self.maximized,
             self.sidebar_collapsed,
             self.mode == .wallpaper_picker,
             dialogKindForRender(self.dialog.kind),
@@ -239,7 +241,11 @@ pub const App = struct {
     }
 
     fn scrollAtPointer(self: *App, direction: isize) void {
+<<<<<<< HEAD
         if (!render.scrollRegionRect(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized).contains(self.pointer_x, self.pointer_y)) {
+=======
+        if (!render.scrollRegionRect(self.current_width, self.current_height, self.maximized, self.sidebar_collapsed).contains(self.pointer_x, self.pointer_y)) {
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             return;
         }
         self.browser.scrollLines(direction);

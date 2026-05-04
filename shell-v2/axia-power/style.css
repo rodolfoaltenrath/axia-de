@@ -1,0 +1,93 @@
+.power-menu-root {
+  background: transparent;
+}
+
+.power-frame {
+  background: rgba(18, 23, 31, 0.84);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  min-width: 332px;
+  border-radius: 24px;
+  box-shadow: 0 20px 44px rgba(4, 10, 18, 0.34);
+}
+
+.shell-menu-content,
+.power-popover-content {
+  min-width: 344px;
+  padding: 14px 16px 16px;
+}
+
+.bar-icon {
+  color: rgba(113, 233, 255, 0.96);
+  min-width: 20px;
+  min-height: 20px;
+}
+
+.shell-menu-row,
+.session-row {
+  min-height: 40px;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+.shell-menu-row:hover,
+.session-row:hover {
+  background: rgba(255, 255, 255, 0.035);
+  border-color: rgba(255, 255, 255, 0.03);
+}
+
+.shell-menu-row-text,
+.session-row-text {
+  font-family: "IBM Plex Sans";
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(246, 248, 255, 0.98);
+}
+
+.shell-menu-shortcut,
+.session-shortcut {
+  font-family: "IBM Plex Sans";
+  font-size: 13px;
+  font-weight: 400;
+  color: rgba(208, 214, 228, 0.76);
+}
+
+.shell-menu-separator,
+.power-separator {
+  margin: 6px 0;
+  opacity: 0.14;
+}
+
+.shell-menu-actions,
+.power-icon-row {
+  margin-top: 12px;
+  margin-bottom: 6px;
+}
+
+.shell-menu-action,
+.power-icon-action {
+  min-width: 108px;
+  min-height: 96px;
+  padding: 0;
+  border-radius: 20px;
+  border: 1px solid transparent;
+  background: transparent;
+}
+
+.shell-menu-action:hover,
+.power-icon-action:hover {
+  background: rgba(255, 255, 255, 0.035);
+  border-color: rgba(255, 255, 255, 0.04);
+}
+
+.shell-menu-action .bar-icon,
+.power-icon-action .bar-icon {
+  min-width: 72px;
+  min-height: 72px;
+}
+
+.power-action-icon {
+  min-width: 72px;
+  min-height: 72px;
+}

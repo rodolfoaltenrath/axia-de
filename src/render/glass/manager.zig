@@ -13,18 +13,27 @@ pub const GlassRegion = region.GlassRegion;
 pub const Manager = struct {
     allocator: std.mem.Allocator,
     output_layout: [*c]c.struct_wlr_output_layout,
+    scene: [*c]c.struct_wlr_scene,
+    backdrop_bottom_root: [*c]c.struct_wlr_scene_tree,
+    backdrop_window_root: [*c]c.struct_wlr_scene_tree,
     root: [*c]c.struct_wlr_scene_tree,
-    quality: GlassQuality = .balanced,
+    quality: GlassQuality = .high,
     regions: std.ArrayListUnmanaged(GlassRegion) = .empty,
 
     pub fn init(
         allocator: std.mem.Allocator,
         output_layout: [*c]c.struct_wlr_output_layout,
+        scene: [*c]c.struct_wlr_scene,
+        backdrop_bottom_root: [*c]c.struct_wlr_scene_tree,
+        backdrop_window_root: [*c]c.struct_wlr_scene_tree,
         root: [*c]c.struct_wlr_scene_tree,
     ) Manager {
         return .{
             .allocator = allocator,
             .output_layout = output_layout,
+            .scene = scene,
+            .backdrop_bottom_root = backdrop_bottom_root,
+            .backdrop_window_root = backdrop_window_root,
             .root = root,
         };
     }
@@ -54,7 +63,17 @@ pub const Manager = struct {
         output: [*c]c.struct_wlr_output,
         box: c.struct_wlr_box,
     ) !void {
-        if (self.findRegion(kind, output)) |entry| {
+        try self.registerRegionInstance(kind, 0, output, box);
+    }
+
+    pub fn registerRegionInstance(
+        self: *Manager,
+        kind: GlassKind,
+        instance_id: usize,
+        output: [*c]c.struct_wlr_output,
+        box: c.struct_wlr_box,
+    ) !void {
+        if (self.findRegion(kind, instance_id, output)) |entry| {
             entry.updateBox(box);
             entry.setEnabled(true);
             entry.setStyle(style.styleFor(kind, self.quality));
@@ -63,6 +82,7 @@ pub const Manager = struct {
 
         try self.regions.append(self.allocator, .{
             .kind = kind,
+            .instance_id = instance_id,
             .output = output,
             .box = box,
             .style = style.styleFor(kind, self.quality),
@@ -75,18 +95,54 @@ pub const Manager = struct {
         output: [*c]c.struct_wlr_output,
         box: c.struct_wlr_box,
     ) void {
-        if (self.findRegion(kind, output)) |entry| {
+        self.updateRegionInstance(kind, 0, output, box);
+    }
+
+    pub fn updateRegionInstance(
+        self: *Manager,
+        kind: GlassKind,
+        instance_id: usize,
+        output: [*c]c.struct_wlr_output,
+        box: c.struct_wlr_box,
+    ) void {
+        if (self.findRegion(kind, instance_id, output)) |entry| {
             entry.updateBox(box);
         }
     }
 
     pub fn removeRegion(self: *Manager, kind: GlassKind, output: [*c]c.struct_wlr_output) void {
+        self.removeRegionInstance(kind, 0, output);
+    }
+
+    pub fn removeRegionInstance(
+        self: *Manager,
+        kind: GlassKind,
+        instance_id: usize,
+        output: [*c]c.struct_wlr_output,
+    ) void {
         for (self.regions.items, 0..) |entry, index| {
-            if (entry.kind == kind and entry.output == output) {
+            if (entry.kind == kind and entry.instance_id == instance_id and entry.output == output) {
                 self.regions.items[index].deinit();
                 _ = self.regions.swapRemove(index);
                 return;
             }
+        }
+    }
+
+    pub fn removeDynamicInstancesForOutput(
+        self: *Manager,
+        kind: GlassKind,
+        output: [*c]c.struct_wlr_output,
+    ) void {
+        var index: usize = 0;
+        while (index < self.regions.items.len) {
+            const entry = self.regions.items[index];
+            if (entry.kind == kind and entry.output == output and entry.instance_id != 0) {
+                self.regions.items[index].deinit();
+                _ = self.regions.swapRemove(index);
+                continue;
+            }
+            index += 1;
         }
     }
 
@@ -96,7 +152,17 @@ pub const Manager = struct {
         output: [*c]c.struct_wlr_output,
         enabled: bool,
     ) void {
-        if (self.findRegion(kind, output)) |entry| {
+        self.setRegionEnabledInstance(kind, 0, output, enabled);
+    }
+
+    pub fn setRegionEnabledInstance(
+        self: *Manager,
+        kind: GlassKind,
+        instance_id: usize,
+        output: [*c]c.struct_wlr_output,
+        enabled: bool,
+    ) void {
+        if (self.findRegion(kind, instance_id, output)) |entry| {
             entry.setEnabled(enabled);
         }
     }
@@ -140,7 +206,16 @@ pub const Manager = struct {
         kind: GlassKind,
         output: [*c]c.struct_wlr_output,
     ) ?*GlassRegion {
-        return self.findRegion(kind, output);
+        return self.findRegion(kind, 0, output);
+    }
+
+    pub fn regionForInstance(
+        self: *Manager,
+        kind: GlassKind,
+        instance_id: usize,
+        output: [*c]c.struct_wlr_output,
+    ) ?*GlassRegion {
+        return self.findRegion(kind, instance_id, output);
     }
 
     pub fn outputArea(self: *const Manager, output: [*c]c.struct_wlr_output) c.struct_wlr_box {
@@ -149,9 +224,14 @@ pub const Manager = struct {
         return box;
     }
 
-    fn findRegion(self: *Manager, kind: GlassKind, output: [*c]c.struct_wlr_output) ?*GlassRegion {
+    fn findRegion(
+        self: *Manager,
+        kind: GlassKind,
+        instance_id: usize,
+        output: [*c]c.struct_wlr_output,
+    ) ?*GlassRegion {
         for (self.regions.items) |*entry| {
-            if (entry.kind == kind and entry.output == output) return entry;
+            if (entry.kind == kind and entry.instance_id == instance_id and entry.output == output) return entry;
         }
         return null;
     }
@@ -168,6 +248,7 @@ pub const Manager = struct {
             output_box,
             entry.box,
             entry.style,
+            self.sceneBackdropContext(entry.output),
         );
         errdefer next_buffer.deinit();
 
@@ -193,5 +274,14 @@ pub const Manager = struct {
             old_buffer.deinit();
         }
         entry.buffer = next_buffer;
+    }
+
+    fn sceneBackdropContext(self: *const Manager, output: [*c]c.struct_wlr_output) ?pipeline.SceneBackdropContext {
+        const scene_output = c.wlr_scene_get_scene_output(self.scene, output) orelse return null;
+        return .{
+            .scene_output = scene_output,
+            .bottom_root = self.backdrop_bottom_root,
+            .window_root = self.backdrop_window_root,
+        };
     }
 };

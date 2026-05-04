@@ -1,0 +1,92 @@
+* {
+  border: none;
+  border-radius: 0;
+  font-family: "IBM Plex Sans", "Noto Sans", sans-serif;
+  font-size: 13px;
+  min-height: 0;
+}
+
+window#waybar {
+  background: transparent;
+  color: #eff5fb;
+}
+
+window#waybar > box {
+  margin: 0;
+  padding: 0;
+}
+
+.modules-left,
+.modules-center,
+.modules-right {
+  margin: 0 4px;
+}
+
+#custom-axia,
+#clock,
+#workspaces,
+#taskbar {
+  background: rgba(14, 23, 37, 0.72);
+  border: 1px solid rgba(215, 232, 255, 0.16);
+  border-radius: 18px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  padding: 0 12px;
+  min-height: 32px;
+}
+
+#custom-axia {
+  color: #fbfdff;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0 16px;
+}
+
+#workspaces {
+  padding: 0 6px;
+}
+
+#workspaces button {
+  color: #aebccd;
+  border-radius: 12px;
+  margin: 4px 2px;
+  padding: 0 10px;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+#workspaces button:hover {
+  background: rgba(142, 183, 232, 0.14);
+  color: #eff6ff;
+}
+
+#workspaces button.active {
+  background: linear-gradient(180deg, rgba(177, 213, 255, 0.24), rgba(121, 171, 231, 0.18));
+  color: #ffffff;
+}
+
+#taskbar {
+  padding: 0 6px;
+}
+
+#taskbar button {
+  margin: 4px 3px;
+  padding: 0 9px;
+  border-radius: 12px;
+  color: #c4d2e1;
+}
+
+#taskbar button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+#taskbar button.active {
+  background: rgba(167, 203, 247, 0.18);
+  color: #ffffff;
+}
+
+#clock {
+  color: #f8fbff;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 0 18px;
+}

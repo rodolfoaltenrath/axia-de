@@ -1,0 +1,36 @@
+{
+  "layer": "top",
+  "position": "top",
+  "mode": "dock",
+  "height": 40,
+  "spacing": 10,
+  "margin-top": 8,
+  "margin-left": 12,
+  "margin-right": 12,
+  "modules-left": ["custom/axia", "wlr/workspaces"],
+  "modules-center": ["clock"],
+  "modules-right": ["wlr/taskbar"],
+
+  "custom/axia": {
+    "format": "Axia",
+    "tooltip": false
+  },
+
+  "wlr/workspaces": {
+    "all-outputs": false,
+    "sort-by-number": true,
+    "format": "{name}"
+  },
+
+  "wlr/taskbar": {
+    "format": "{icon}",
+    "icon-size": 18,
+    "tooltip-format": "{title}",
+    "ignore-list": ["waybar"]
+  },
+
+  "clock": {
+    "format": "{:%H:%M}",
+    "tooltip-format": "{:%A, %d %B %Y}"
+  }
+}

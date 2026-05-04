@@ -36,6 +36,7 @@ const LayoutMode = enum {
 pub const DestroyCallback = *const fn (?*anyopaque, *View) void;
 pub const RequestMoveCallback = *const fn (?*anyopaque, *View, u32) void;
 pub const RequestResizeCallback = *const fn (?*anyopaque, *View, u32, u32) void;
+pub const StateChangedCallback = *const fn (?*anyopaque, *View) void;
 
 pub const View = struct {
     allocator: std.mem.Allocator,
@@ -54,6 +55,8 @@ pub const View = struct {
     workspace_visible: bool = true,
     mapped: bool = false,
     minimized: bool = false,
+    maximized: bool = false,
+    fullscreen: bool = false,
     x: i32,
     y: i32,
     restore_x: i32,
@@ -66,6 +69,8 @@ pub const View = struct {
     request_ctx: ?*anyopaque,
     request_move_cb: RequestMoveCallback,
     request_resize_cb: RequestResizeCallback,
+    state_ctx: ?*anyopaque,
+    state_changed_cb: ?StateChangedCallback = null,
     initial_configure_sent: bool = false,
     commit: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
     map: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
@@ -76,6 +81,8 @@ pub const View = struct {
     request_minimize: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
     request_move: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
     request_resize: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
+    set_title: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
+    set_app_id: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
     chrome_hovered: chrome.HoveredControl = .none,
 
     pub fn create(
@@ -92,6 +99,8 @@ pub const View = struct {
         request_ctx: ?*anyopaque,
         request_move_cb: RequestMoveCallback,
         request_resize_cb: RequestResizeCallback,
+        state_ctx: ?*anyopaque,
+        state_changed_cb: StateChangedCallback,
         workspace_index: usize,
         x: i32,
         y: i32,
@@ -116,6 +125,8 @@ pub const View = struct {
             .request_ctx = request_ctx,
             .request_move_cb = request_move_cb,
             .request_resize_cb = request_resize_cb,
+            .state_ctx = state_ctx,
+            .state_changed_cb = state_changed_cb,
         };
 
         view.commit.notify = handleCommit;
@@ -127,6 +138,8 @@ pub const View = struct {
         view.request_minimize.notify = handleRequestMinimize;
         view.request_move.notify = handleRequestMove;
         view.request_resize.notify = handleRequestResize;
+        view.set_title.notify = handleSetTitle;
+        view.set_app_id.notify = handleSetAppId;
 
         c.wl_signal_add(&xdg_surface.*.surface.*.events.commit, &view.commit);
         c.wl_signal_add(&xdg_surface.*.surface.*.events.map, &view.map);
@@ -137,6 +150,8 @@ pub const View = struct {
         c.wl_signal_add(&toplevel.*.events.request_minimize, &view.request_minimize);
         c.wl_signal_add(&toplevel.*.events.request_move, &view.request_move);
         c.wl_signal_add(&toplevel.*.events.request_resize, &view.request_resize);
+        c.wl_signal_add(&toplevel.*.events.set_title, &view.set_title);
+        c.wl_signal_add(&toplevel.*.events.set_app_id, &view.set_app_id);
 
         return view;
     }
@@ -147,6 +162,8 @@ pub const View = struct {
         c.wl_list_remove(&self.request_minimize.link);
         c.wl_list_remove(&self.request_fullscreen.link);
         c.wl_list_remove(&self.request_maximize.link);
+        c.wl_list_remove(&self.set_app_id.link);
+        c.wl_list_remove(&self.set_title.link);
         c.wl_list_remove(&self.destroy.link);
         c.wl_list_remove(&self.unmap.link);
         c.wl_list_remove(&self.map.link);
@@ -254,6 +271,7 @@ pub const View = struct {
     }
 
     pub fn canStartInteractive(self: *const View) bool {
+<<<<<<< HEAD
         return self.workspace_visible and
             !self.minimized and
             !self.toplevel.*.current.fullscreen and
@@ -266,6 +284,9 @@ pub const View = struct {
             self.layout_mode == .floating and
             !self.toplevel.*.current.maximized and
             !self.toplevel.*.requested.maximized;
+=======
+        return self.workspace_visible and !self.minimized and !self.isMaximized() and !self.isFullscreen() and !self.toplevel.*.requested.minimized;
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     }
 
     pub fn workspaceIndex(self: *const View) usize {
@@ -300,10 +321,21 @@ pub const View = struct {
     }
 
     pub fn compositorChromeVisible(self: *const View) bool {
-        return self.usesCompositorChrome() and !self.toplevel.*.current.fullscreen and !self.toplevel.*.requested.fullscreen;
+        return self.usesCompositorChrome() and !self.isFullscreen();
+    }
+
+    fn chromeFrameMargin(self: *const View) i32 {
+        if (!self.compositorChromeVisible()) return 0;
+        return if (self.isMaximized()) 0 else frame_margin_px;
+    }
+
+    fn chromeContentInset(self: *const View) i32 {
+        if (!self.compositorChromeVisible()) return 0;
+        return if (self.isMaximized()) 0 else content_inset_px;
     }
 
     pub fn outerWidth(self: *const View) i32 {
+<<<<<<< HEAD
         const metrics = self.chromeMetrics(self.currentChromeMode());
         return self.effectiveWidth() + metrics.left + metrics.right;
     }
@@ -339,6 +371,13 @@ pub const View = struct {
             .width = right - left,
             .height = bottom - top,
         };
+=======
+        return self.effectiveWidth() + self.chromeFrameMargin() * 2;
+    }
+
+    pub fn outerHeight(self: *const View) i32 {
+        return self.effectiveHeight() + if (self.compositorChromeVisible()) self.chromeFrameMargin() * 2 + titlebar_height_px else 0;
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     }
 
     pub fn localCoords(self: *const View, lx: f64, ly: f64) struct { x: f64, y: f64 } {
@@ -352,9 +391,9 @@ pub const View = struct {
         if (!self.compositorChromeVisible()) return .none;
 
         const width: u32 = @intCast(@max(self.outerWidth(), 1));
-        if (chrome.closeRect(width).contains(local_x, local_y)) return .close;
-        if (chrome.maximizeRect(width).contains(local_x, local_y)) return .maximize;
-        if (chrome.minimizeRect(width).contains(local_x, local_y)) return .minimize;
+        if (chrome.closeRectForMode(width, self.isMaximized()).contains(local_x, local_y)) return .close;
+        if (chrome.maximizeRectForMode(width, self.isMaximized()).contains(local_x, local_y)) return .maximize;
+        if (chrome.minimizeRectForMode(width, self.isMaximized()).contains(local_x, local_y)) return .minimize;
         return .none;
     }
 
@@ -362,7 +401,7 @@ pub const View = struct {
         if (!self.compositorChromeVisible()) return false;
         const width: u32 = @intCast(@max(self.outerWidth(), 1));
         const height: u32 = @intCast(@max(self.outerHeight(), 1));
-        return chrome.titlebarDragRect(width, height, chrome_left_reserved, chrome_right_reserved).contains(local_x, local_y);
+        return chrome.titlebarDragRectForMode(width, height, chrome_left_reserved, chrome_right_reserved, self.isMaximized()).contains(local_x, local_y);
     }
 
     pub fn chromeResizeEdges(self: *const View, local_x: f64, local_y: f64) u32 {
@@ -387,13 +426,11 @@ pub const View = struct {
     }
 
     pub fn requestMinimize(self: *View) void {
-        self.minimized = true;
-        self.syncVisibility();
-        _ = c.wlr_xdg_toplevel_set_activated(self.toplevel, false);
-        _ = c.wlr_xdg_surface_schedule_configure(self.xdg_surface);
+        self.setMinimized(true);
     }
 
     pub fn toggleMaximized(self: *View) void {
+<<<<<<< HEAD
         if (self.toplevel.*.current.maximized or self.toplevel.*.requested.maximized) {
             self.restoreFloatingGeometry();
             return;
@@ -435,6 +472,9 @@ pub const View = struct {
         _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, client_box.width, client_box.height);
         _ = c.wlr_xdg_toplevel_set_size(self.toplevel, client_box.width, client_box.height);
         _ = c.wlr_xdg_toplevel_set_maximized(self.toplevel, true);
+=======
+        self.setMaximized(!self.isMaximized());
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     }
 
     pub fn rememberRestoreGeometry(self: *View, x: i32, y: i32, width: i32, height: i32) void {
@@ -501,6 +541,7 @@ pub const View = struct {
         self.usable_area = usable_area;
         if (!self.xdg_surface.*.initialized) return;
 
+<<<<<<< HEAD
         if (self.toplevel.*.current.fullscreen) {
             const output_area = self.outputArea();
             const client_box = self.clientBoxForOuterWithMode(output_area, .none);
@@ -518,6 +559,33 @@ pub const View = struct {
             self.setPosition(outer_area.x, outer_area.y);
             _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, client_box.width, client_box.height);
             _ = c.wlr_xdg_toplevel_set_size(self.toplevel, client_box.width, client_box.height);
+=======
+        if (!self.isMaximized() and !self.isFullscreen()) {
+            const outer_width = self.outerWidth();
+            const outer_height = self.outerHeight();
+            if (self.x == usable_area.x and self.y == usable_area.y and outer_width == usable_area.width and outer_height == usable_area.height) {
+                self.setMaximized(true);
+                return;
+            }
+        }
+
+        if (self.isMaximized()) {
+            const client_box = self.clientBoxForOuter(usable_area);
+            self.setPosition(usable_area.x, usable_area.y);
+            _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, client_box.width, client_box.height);
+            _ = c.wlr_xdg_toplevel_set_size(self.toplevel, client_box.width, client_box.height);
+            self.updateSceneLayout() catch {};
+            return;
+        }
+
+        if (self.isFullscreen()) {
+            const output_area = self.outputArea();
+            const client_box = self.clientBoxForOuter(output_area);
+            self.setPosition(output_area.x, output_area.y);
+            _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, client_box.width, client_box.height);
+            _ = c.wlr_xdg_toplevel_set_size(self.toplevel, client_box.width, client_box.height);
+            self.updateSceneLayout() catch {};
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             return;
         }
 
@@ -535,7 +603,9 @@ pub const View = struct {
     }
 
     pub fn isLauncher(self: *const View) bool {
-        if (self.toplevel.*.app_id != null and std.mem.eql(u8, std.mem.span(self.toplevel.*.app_id), "axia-launcher")) {
+        if (self.toplevel.*.app_id != null and (std.mem.eql(u8, std.mem.span(self.toplevel.*.app_id), "axia-launcher") or
+            std.mem.eql(u8, std.mem.span(self.toplevel.*.app_id), "org.axia.launcher")))
+        {
             return true;
         }
         if (self.toplevel.*.title != null and std.mem.eql(u8, std.mem.span(self.toplevel.*.title), "Axia Launcher")) {
@@ -555,15 +625,21 @@ pub const View = struct {
     }
 
     pub fn restoreFromMinimized(self: *View) void {
-        if (!self.minimized) return;
-        self.minimized = false;
-        self.syncVisibility();
-        _ = c.wlr_xdg_surface_schedule_configure(self.xdg_surface);
+        self.setMinimized(false);
     }
 
     pub fn applyTiledRect(self: *View, rect: c.struct_wlr_box, edges: u32) void {
         self.minimized = false;
+<<<<<<< HEAD
         self.layout_mode = .tiled;
+=======
+        self.maximized = false;
+        self.fullscreen = false;
+        self.restore_x = rect.x;
+        self.restore_y = rect.y;
+        self.restore_width = rect.width;
+        self.restore_height = rect.height;
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
         self.syncVisibility();
         _ = c.wlr_xdg_toplevel_set_fullscreen(self.toplevel, false);
         _ = c.wlr_xdg_toplevel_set_maximized(self.toplevel, false);
@@ -571,7 +647,97 @@ pub const View = struct {
         const client_box = self.clientBoxForOuterWithMode(rect, .floating);
         _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, client_box.width, client_box.height);
         self.setPosition(rect.x, rect.y);
+<<<<<<< HEAD
         _ = c.wlr_xdg_toplevel_set_size(self.toplevel, client_box.width, client_box.height);
+=======
+        _ = c.wlr_xdg_toplevel_set_size(self.toplevel, rect.width, rect.height);
+        self.notifyStateChanged();
+    }
+
+    pub fn setMinimized(self: *View, minimized: bool) void {
+        if (self.minimized == minimized) return;
+        self.minimized = minimized;
+        self.syncVisibility();
+        if (minimized) {
+            _ = c.wlr_xdg_toplevel_set_activated(self.toplevel, false);
+        }
+        _ = c.wlr_xdg_surface_schedule_configure(self.xdg_surface);
+        self.notifyStateChanged();
+    }
+
+    pub fn setMaximized(self: *View, maximized: bool) void {
+        if (maximized == self.isMaximized()) return;
+        self.maximized = maximized;
+        if (maximized) self.fullscreen = false;
+        if (!maximized) {
+            self.setPosition(self.restore_x, self.restore_y);
+            _ = c.wlr_xdg_toplevel_set_tiled(self.toplevel, 0);
+            _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, 0, 0);
+            _ = c.wlr_xdg_toplevel_set_size(self.toplevel, self.restore_width, self.restore_height);
+            _ = c.wlr_xdg_toplevel_set_maximized(self.toplevel, false);
+            self.updateSceneLayout() catch {};
+            self.notifyStateChanged();
+            return;
+        }
+
+        self.restoreCurrentGeometry();
+        const client_box = self.clientBoxForOuter(self.usable_area);
+        self.setPosition(self.usable_area.x, self.usable_area.y);
+        _ = c.wlr_xdg_toplevel_set_tiled(
+            self.toplevel,
+            c.WLR_EDGE_TOP | c.WLR_EDGE_BOTTOM | c.WLR_EDGE_LEFT | c.WLR_EDGE_RIGHT,
+        );
+        _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, client_box.width, client_box.height);
+        _ = c.wlr_xdg_toplevel_set_size(self.toplevel, client_box.width, client_box.height);
+        _ = c.wlr_xdg_toplevel_set_maximized(self.toplevel, true);
+        self.notifyStateChanged();
+    }
+
+    pub fn setFullscreen(self: *View, fullscreen: bool) void {
+        if (fullscreen == self.isFullscreen()) return;
+        self.fullscreen = fullscreen;
+        if (fullscreen) self.maximized = false;
+        if (fullscreen) {
+            self.minimized = false;
+            self.syncVisibility();
+            self.restoreCurrentGeometry();
+            const output_area = self.outputArea();
+            self.setPosition(output_area.x, output_area.y);
+            _ = c.wlr_xdg_toplevel_set_tiled(self.toplevel, 0);
+            const client_box = self.clientBoxForOuter(output_area);
+            _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, client_box.width, client_box.height);
+            _ = c.wlr_xdg_toplevel_set_size(self.toplevel, client_box.width, client_box.height);
+            _ = c.wlr_xdg_toplevel_set_maximized(self.toplevel, false);
+            _ = c.wlr_xdg_toplevel_set_fullscreen(self.toplevel, true);
+            self.updateSceneLayout() catch {};
+            self.notifyStateChanged();
+            return;
+        }
+
+        self.setPosition(self.restore_x, self.restore_y);
+        _ = c.wlr_xdg_toplevel_set_tiled(self.toplevel, 0);
+        _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, 0, 0);
+        _ = c.wlr_xdg_toplevel_set_size(self.toplevel, self.restore_width, self.restore_height);
+        _ = c.wlr_xdg_toplevel_set_fullscreen(self.toplevel, false);
+        self.updateSceneLayout() catch {};
+        self.notifyStateChanged();
+    }
+
+    pub fn isMaximized(self: *const View) bool {
+        return self.maximized or self.toplevel.*.current.maximized or self.toplevel.*.requested.maximized;
+    }
+
+    pub fn isFullscreen(self: *const View) bool {
+        return self.fullscreen or self.toplevel.*.current.fullscreen or self.toplevel.*.requested.fullscreen;
+    }
+
+    pub fn isForeignToplevelCandidate(self: *const View) bool {
+        return !self.isLauncher() and !self.isAppGrid();
+    }
+
+    pub fn position(self: *const View) struct { x: i32, y: i32 } {
+        return .{ .x = self.x, .y = self.y };
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     }
 
     fn titleOrFallback(toplevel: [*c]c.struct_wlr_xdg_toplevel) []const u8 {
@@ -589,6 +755,7 @@ pub const View = struct {
         view.syncVisibility();
         view.focus();
         view.redrawCompositorChrome() catch {};
+        view.notifyStateChanged();
     }
 
     fn handleCommit(listener: [*c]c.struct_wl_listener, _: ?*anyopaque) callconv(.c) void {
@@ -609,6 +776,26 @@ pub const View = struct {
 
         view.updateSceneLayout() catch {};
         view.redrawCompositorChrome() catch {};
+        view.notifyStateChanged();
+        view.autoMaximizeIfMatchingUsableArea();
+    }
+
+    fn autoMaximizeIfMatchingUsableArea(self: *View) void {
+        if (self.isMaximized() or self.isFullscreen()) return;
+        if (!self.xdg_surface.*.initialized) return;
+
+        const pos = self.position();
+        const outer_w = self.outerWidth();
+        const outer_h = self.outerHeight();
+        const ua = self.usable_area;
+
+        const tol: i32 = 1;
+        if (@abs(pos.x - ua.x) > tol) return;
+        if (@abs(pos.y - ua.y) > tol) return;
+        if (@abs(@as(i32, outer_w) - ua.width) > tol) return;
+        if (@abs(@as(i32, outer_h) - ua.height) > tol) return;
+
+        self.setMaximized(true);
     }
 
     fn handleUnmap(listener: [*c]c.struct_wl_listener, _: ?*anyopaque) callconv(.c) void {
@@ -616,6 +803,7 @@ pub const View = struct {
         view.mapped = false;
         view.syncVisibility();
         view.unfocus();
+        view.notifyStateChanged();
     }
 
     fn handleDestroy(listener: [*c]c.struct_wl_listener, _: ?*anyopaque) callconv(.c) void {
@@ -639,6 +827,17 @@ pub const View = struct {
     fn handleRequestMinimize(listener: [*c]c.struct_wl_listener, _: ?*anyopaque) callconv(.c) void {
         const view: *View = @ptrCast(@as(*allowzero View, @fieldParentPtr("request_minimize", listener)));
         view.applyRequestedWindowState();
+    }
+
+    fn handleSetTitle(listener: [*c]c.struct_wl_listener, _: ?*anyopaque) callconv(.c) void {
+        const view: *View = @ptrCast(@as(*allowzero View, @fieldParentPtr("set_title", listener)));
+        view.redrawCompositorChrome() catch {};
+        view.notifyStateChanged();
+    }
+
+    fn handleSetAppId(listener: [*c]c.struct_wl_listener, _: ?*anyopaque) callconv(.c) void {
+        const view: *View = @ptrCast(@as(*allowzero View, @fieldParentPtr("set_app_id", listener)));
+        view.notifyStateChanged();
     }
 
     fn handleRequestMove(listener: [*c]c.struct_wl_listener, data: ?*anyopaque) callconv(.c) void {
@@ -705,6 +904,8 @@ pub const View = struct {
         self.syncVisibility();
 
         if (requested.fullscreen) {
+            self.fullscreen = true;
+            self.maximized = false;
             self.restoreCurrentGeometry();
             self.layout_mode = .fullscreen;
             self.setPosition(output_area.x, output_area.y);
@@ -719,6 +920,8 @@ pub const View = struct {
         }
 
         if (requested.maximized) {
+            self.maximized = true;
+            self.fullscreen = false;
             self.restoreCurrentGeometry();
             const outer_area = self.attachedOuterArea();
             self.setPosition(outer_area.x, outer_area.y);
@@ -736,12 +939,28 @@ pub const View = struct {
             return;
         }
 
+<<<<<<< HEAD
         self.restoreFloatingGeometry();
     }
 
     fn restoreCurrentGeometry(self: *View) void {
         if (self.layout_mode != .floating) return;
         if (self.toplevel.*.current.maximized or self.toplevel.*.current.fullscreen) return;
+=======
+        self.maximized = false;
+        self.fullscreen = false;
+        self.setPosition(self.restore_x, self.restore_y);
+        _ = c.wlr_xdg_toplevel_set_tiled(self.toplevel, 0);
+        _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, 0, 0);
+        _ = c.wlr_xdg_toplevel_set_size(self.toplevel, self.restore_width, self.restore_height);
+        _ = c.wlr_xdg_toplevel_set_maximized(self.toplevel, false);
+        _ = c.wlr_xdg_toplevel_set_fullscreen(self.toplevel, false);
+        self.updateSceneLayout() catch {};
+    }
+
+    fn restoreCurrentGeometry(self: *View) void {
+        if (self.isMaximized() or self.isFullscreen()) return;
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
 
         self.restore_x = self.x;
         self.restore_y = self.y;
@@ -781,7 +1000,14 @@ pub const View = struct {
         }
     }
 
+    fn notifyStateChanged(self: *View) void {
+        if (self.state_changed_cb) |callback| {
+            callback(self.state_ctx, self);
+        }
+    }
+
     fn clientBoxForOuter(self: *const View, outer: c.struct_wlr_box) c.struct_wlr_box {
+<<<<<<< HEAD
         return self.clientBoxForOuterWithMode(outer, self.currentChromeMode());
     }
 
@@ -793,6 +1019,15 @@ pub const View = struct {
             .y = outer.y,
             .width = @max(outer.width - metrics.left - metrics.right, self.minWidth()),
             .height = @max(outer.height - metrics.top - metrics.bottom, self.minHeight()),
+=======
+        if (!self.compositorChromeVisible()) return outer;
+        const frame_margin = self.chromeFrameMargin();
+        return .{
+            .x = outer.x,
+            .y = outer.y,
+            .width = @max(outer.width - frame_margin * 2, self.minWidth()),
+            .height = @max(outer.height - frame_margin * 2 - titlebar_height_px, self.minHeight()),
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
         };
     }
 
@@ -803,17 +1038,29 @@ pub const View = struct {
         const metrics = self.chromeMetrics(self.currentChromeMode());
 
         if (self.content_tree) |content_tree| {
+            const content_inset = self.chromeContentInset();
+            const frame_margin = self.chromeFrameMargin();
             var clip = c.struct_wlr_box{
                 .x = 0,
                 .y = 0,
+<<<<<<< HEAD
                 .width = @max(self.effectiveWidth() - metrics.content_inset * 2, 1),
                 .height = @max(self.effectiveHeight() - metrics.content_inset * 2, 1),
+=======
+                .width = @max(self.effectiveWidth() - content_inset * 2, 1),
+                .height = @max(self.effectiveHeight() - content_inset * 2, 1),
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             };
             c.wlr_scene_subsurface_tree_set_clip(&content_tree.*.node, &clip);
             c.wlr_scene_node_set_position(
                 &content_tree.*.node,
+<<<<<<< HEAD
                 metrics.left + metrics.content_inset,
                 metrics.top + metrics.content_inset,
+=======
+                if (self.compositorChromeVisible()) frame_margin + content_inset else 0,
+                if (self.compositorChromeVisible()) frame_margin + titlebar_height_px + content_inset else 0,
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             );
         }
 
@@ -856,7 +1103,11 @@ pub const View = struct {
         chrome.drawWindowShell(buffer.cr, buffer.width, buffer.height, .{
             .title = self.title(),
             .title_x = 22.0,
+<<<<<<< HEAD
             .attached_to_edges = self.currentChromeMode() == .attached,
+=======
+            .maximized = self.isMaximized(),
+>>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
         }, self.chrome_hovered);
         c.cairo_surface_flush(buffer.surface);
         if (self.frame_scene_buffer) |scene_buffer| {

@@ -5,6 +5,7 @@ const LayerSurface = @import("surface.zig").LayerSurface;
 const log = std.log.scoped(.axia_layers);
 
 pub const LayoutCallback = *const fn (?*anyopaque, c.struct_wlr_box) void;
+pub const SurfaceStateCallback = *const fn (?*anyopaque, *LayerSurface) void;
 
 pub const LayerManager = struct {
     allocator: std.mem.Allocator,
@@ -20,7 +21,10 @@ pub const LayerManager = struct {
     usable_area: c.struct_wlr_box = std.mem.zeroes(c.struct_wlr_box),
     layout_ctx: ?*anyopaque = null,
     layout_cb: ?LayoutCallback = null,
+    surface_state_ctx: ?*anyopaque = null,
+    surface_state_cb: ?SurfaceStateCallback = null,
     surfaces: std.ArrayListUnmanaged(*LayerSurface) = .empty,
+    relayout_pending: bool = false,
     new_surface: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
     listeners_ready: bool = false,
 
@@ -50,7 +54,7 @@ pub const LayerManager = struct {
 
     pub fn setPrimaryOutput(self: *LayerManager, output: [*c]c.struct_wlr_output) void {
         self.primary_output = output;
-        self.relayout();
+        self.scheduleRelayout();
     }
 
     pub fn setupListeners(self: *LayerManager) void {
@@ -64,8 +68,17 @@ pub const LayerManager = struct {
         self.layout_cb = callback;
     }
 
+    pub fn setSurfaceStateCallback(self: *LayerManager, ctx: ?*anyopaque, callback: SurfaceStateCallback) void {
+        self.surface_state_ctx = ctx;
+        self.surface_state_cb = callback;
+    }
+
     pub fn getUsableArea(self: *const LayerManager) c.struct_wlr_box {
         return self.usable_area;
+    }
+
+    pub fn surfacesSlice(self: *const LayerManager) []const *LayerSurface {
+        return self.surfaces.items;
     }
 
     pub fn deinit(self: *LayerManager) void {
@@ -112,7 +125,7 @@ pub const LayerManager = struct {
 
     fn registerSurface(self: *LayerManager, layer_surface: [*c]c.struct_wlr_layer_surface_v1) !void {
         if (layer_surface.*.output == null) {
-            layer_surface.*.output = self.primary_output orelse return error.PrimaryOutputMissing;
+            layer_surface.*.output = self.resolveOutput() orelse return error.PrimaryOutputMissing;
         }
 
         const parent = self.rootForLayer(layer_surface.*.pending.layer);
@@ -129,22 +142,25 @@ pub const LayerManager = struct {
         errdefer self.allocator.destroy(surface);
 
         try self.surfaces.append(self.allocator, surface);
-        _ = c.wl_event_loop_add_idle(self.event_loop, handleRelayoutIdle, self);
         log.info("new layer surface registered", .{});
+        self.scheduleRelayout();
     }
 
     fn unregisterSurface(self: *LayerManager, target: *LayerSurface) void {
+        if (self.surface_state_cb) |callback| {
+            callback(self.surface_state_ctx, target);
+        }
         for (self.surfaces.items, 0..) |surface, index| {
             if (surface == target) {
                 _ = self.surfaces.swapRemove(index);
                 break;
             }
         }
-        self.relayout();
+        self.scheduleRelayout();
     }
 
     fn relayout(self: *LayerManager) void {
-        const output = self.primary_output orelse return;
+        const output = self.resolveOutput() orelse return;
 
         var full_area = std.mem.zeroes(c.struct_wlr_box);
         c.wlr_output_layout_get_box(self.output_layout, output, &full_area);
@@ -162,7 +178,7 @@ pub const LayerManager = struct {
     }
 
     fn relayoutLayer(self: *LayerManager, layer: u32, full_area: c.struct_wlr_box, usable_area: *c.struct_wlr_box) void {
-        const output = self.primary_output orelse return;
+        const output = self.resolveOutput() orelse return;
         for (self.surfaces.items) |surface| {
             if (surface.layer() != layer) continue;
             if (surface.layer_surface.*.output != output) continue;
@@ -217,8 +233,25 @@ pub const LayerManager = struct {
         const layer_surface: [*c]c.struct_wlr_layer_surface_v1 = @ptrCast(@alignCast(raw_surface));
 
         manager.registerSurface(layer_surface) catch |err| {
+            if (err == error.PrimaryOutputMissing) {
+                log.warn("deferring layer surface registration until an output is available", .{});
+                return;
+            }
             log.err("failed to register layer surface: {}", .{err});
         };
+    }
+
+    fn resolveOutput(self: *const LayerManager) ?[*c]c.struct_wlr_output {
+        if (self.primary_output) |output| return output;
+        if (c.wlr_output_layout_get_center_output(self.output_layout)) |output| return output;
+
+        const head = &self.output_layout.*.outputs;
+        const first = head.*.next orelse return null;
+        if (first == head) return null;
+
+        const layout_output: *c.struct_wlr_output_layout_output =
+            @ptrCast(@alignCast(@as(*allowzero c.struct_wlr_output_layout_output, @fieldParentPtr("link", first))));
+        return layout_output.output;
     }
 
     fn unregisterSurfaceCallback(ctx: ?*anyopaque, surface: *LayerSurface) void {
@@ -227,13 +260,23 @@ pub const LayerManager = struct {
         manager.unregisterSurface(surface);
     }
 
-    fn handleSurfaceCommit(ctx: ?*anyopaque, _: *LayerSurface) void {
-        _ = ctx;
+    fn handleSurfaceCommit(ctx: ?*anyopaque, surface: *LayerSurface) void {
+        const raw_manager = ctx orelse return;
+        const manager: *LayerManager = @ptrCast(@alignCast(raw_manager));
+        _ = surface;
+        manager.scheduleRelayout();
+    }
+
+    fn scheduleRelayout(self: *LayerManager) void {
+        if (self.relayout_pending) return;
+        self.relayout_pending = true;
+        _ = c.wl_event_loop_add_idle(self.event_loop, handleRelayoutIdle, self);
     }
 
     fn handleRelayoutIdle(data: ?*anyopaque) callconv(.c) void {
         const raw_manager = data orelse return;
         const manager: *LayerManager = @ptrCast(@alignCast(raw_manager));
+        manager.relayout_pending = false;
         manager.relayout();
     }
 };
