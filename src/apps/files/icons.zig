@@ -46,16 +46,18 @@ pub const SidebarIcons = struct {
         return self.folder_surface;
     }
 
-    pub fn ensureVisibleThumbnails(self: *SidebarIcons, snapshot: browser.Snapshot) void {
+    pub fn ensureVisibleThumbnails(self: *SidebarIcons, snapshot: *const browser.Snapshot) void {
         var generated_this_frame: usize = 0;
         for (0..snapshot.count) |index| {
-            const entry = snapshot.entries[index];
+            const entry = &snapshot.entries[index];
             if (entry.kind != .file) continue;
-            if (!self.hasThumbnailRecord(entry.pathText())) {
+            const path = entry.pathText();
+            if (!isThumbnailCandidate(path)) continue;
+            if (!self.hasThumbnailRecord(path)) {
                 if (generated_this_frame >= 6) continue;
                 generated_this_frame += 1;
             }
-            self.ensureThumbnail(entry.pathText(), entry.modified_unix, entry.file_size_bytes) catch {};
+            self.ensureThumbnail(path, entry.modified_unix, entry.file_size_bytes) catch {};
         }
     }
 
@@ -95,10 +97,6 @@ pub const SidebarIcons = struct {
     }
 
     fn buildThumbnailSurface(self: *SidebarIcons, path: []const u8, modified_unix: i64, file_size_bytes: u64) !?*c.cairo_surface_t {
-        if (hasExtension(path, ".png")) {
-            return loadSurface(path) catch null;
-        }
-
         const thumb_path = try thumbnailPath(self.allocator, path, modified_unix, file_size_bytes);
         defer self.allocator.free(thumb_path);
 

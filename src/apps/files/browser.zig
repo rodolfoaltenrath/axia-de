@@ -25,10 +25,8 @@ pub const Entry = struct {
 pub const EntryView = struct {
     kind: EntryKind = .file,
     selected: bool = false,
-    name: [120]u8 = [_]u8{0} ** 120,
-    name_len: usize = 0,
-    path: [std.fs.max_path_bytes]u8 = [_]u8{0} ** std.fs.max_path_bytes,
-    path_len: usize = 0,
+    name: []const u8 = "",
+    path: []const u8 = "",
     modified: [64]u8 = [_]u8{0} ** 64,
     modified_len: usize = 0,
     size: [32]u8 = [_]u8{0} ** 32,
@@ -37,11 +35,11 @@ pub const EntryView = struct {
     file_size_bytes: u64 = 0,
 
     pub fn text(self: *const EntryView) []const u8 {
-        return self.name[0..self.name_len];
+        return self.name;
     }
 
     pub fn pathText(self: *const EntryView) []const u8 {
-        return self.path[0..self.path_len];
+        return self.path;
     }
 
     pub fn modifiedText(self: *const EntryView) []const u8 {
@@ -54,17 +52,15 @@ pub const EntryView = struct {
 };
 
 pub const PinnedFolderView = struct {
-    label: [96]u8 = [_]u8{0} ** 96,
-    label_len: usize = 0,
-    path: [std.fs.max_path_bytes]u8 = [_]u8{0} ** std.fs.max_path_bytes,
-    path_len: usize = 0,
+    label: []const u8 = "",
+    path: []const u8 = "",
 
     pub fn labelText(self: *const PinnedFolderView) []const u8 {
-        return self.label[0..self.label_len];
+        return self.label;
     }
 
     pub fn pathText(self: *const PinnedFolderView) []const u8 {
-        return self.path[0..self.path_len];
+        return self.path;
     }
 };
 
@@ -241,7 +237,7 @@ pub const Browser = struct {
             const name = try self.allocator.dupe(u8, entry.name);
             errdefer self.allocator.free(name);
 
-            const metadata = try readEntryMetadata(self.allocator, joined_path, kind.?);
+            const metadata = readEntryMetadata(joined_path, kind.?);
 
             try self.entries.append(self.allocator, .{
                 .kind = kind.?,
@@ -369,6 +365,16 @@ pub const Browser = struct {
         const index = self.page_start + visible_index;
         if (index >= self.entries.items.len) return null;
         return self.entries.items[index];
+    }
+
+    pub fn visibleCount(self: *const Browser, visible_limit: usize) usize {
+        const limit = boundedVisibleLimit(visible_limit);
+        const end = @min(self.entries.items.len, self.page_start + limit);
+        return end - self.page_start;
+    }
+
+    pub fn pinnedFolderCount(self: *const Browser) usize {
+        return @min(self.pinned_folders.items.len, max_pinned_count);
     }
 
     pub fn selectedPath(self: *const Browser) ?[]const u8 {
@@ -613,12 +619,8 @@ pub const Browser = struct {
             const entry = self.entries.items[self.page_start + visible_index];
             state.entries[visible_index].kind = entry.kind;
             state.entries[visible_index].selected = self.isSelectedPath(entry.path);
-            const len = @min(entry.name.len, state.entries[visible_index].name.len);
-            @memcpy(state.entries[visible_index].name[0..len], entry.name[0..len]);
-            state.entries[visible_index].name_len = len;
-            const path_len = @min(entry.path.len, state.entries[visible_index].path.len);
-            @memcpy(state.entries[visible_index].path[0..path_len], entry.path[0..path_len]);
-            state.entries[visible_index].path_len = path_len;
+            state.entries[visible_index].name = entry.name;
+            state.entries[visible_index].path = entry.path;
             state.entries[visible_index].modified_unix = entry.modified_unix;
             state.entries[visible_index].file_size_bytes = entry.file_size_bytes;
             state.entries[visible_index].modified_len = formatModified(
@@ -638,8 +640,8 @@ pub const Browser = struct {
         state.pinned_count = @min(self.pinned_folders.items.len, max_pinned_count);
         for (0..state.pinned_count) |index| {
             const pinned = self.pinned_folders.items[index];
-            state.pinned[index].label_len = writeText(state.pinned[index].label[0..], pinned.label);
-            state.pinned[index].path_len = writeText(state.pinned[index].path[0..], pinned.path);
+            state.pinned[index].label = pinned.label;
+            state.pinned[index].path = pinned.path;
         }
         return state;
     }
@@ -1050,7 +1052,7 @@ const EntryMetadata = struct {
     child_count: usize,
 };
 
-fn readEntryMetadata(allocator: std.mem.Allocator, path: []const u8, kind: EntryKind) !EntryMetadata {
+fn readEntryMetadata(path: []const u8, kind: EntryKind) EntryMetadata {
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const c_path = toCString(&path_buf, path);
     var stat_buf: c.struct_stat = undefined;
@@ -1061,24 +1063,8 @@ fn readEntryMetadata(allocator: std.mem.Allocator, path: []const u8, kind: Entry
     return .{
         .modified_unix = @intCast(stat_buf.st_mtim.tv_sec),
         .file_size_bytes = if (kind == .file) @intCast(stat_buf.st_size) else 0,
-        .child_count = if (kind == .directory) countDirectoryChildren(allocator, path) catch 0 else 0,
+        .child_count = 0,
     };
-}
-
-fn countDirectoryChildren(allocator: std.mem.Allocator, path: []const u8) !usize {
-    const normalized = try normalizeAbsolute(allocator, path);
-    defer allocator.free(normalized);
-
-    var dir = try std.fs.openDirAbsolute(normalized, .{ .iterate = true });
-    defer dir.close();
-
-    var count: usize = 0;
-    var iterator = dir.iterate();
-    while (try iterator.next()) |entry| {
-        if (entry.name.len == 0 or entry.name[0] == '.') continue;
-        count += 1;
-    }
-    return count;
 }
 
 fn formatModified(timestamp: i64, buffer: []u8) usize {
@@ -1112,7 +1098,7 @@ fn formatModified(timestamp: i64, buffer: []u8) usize {
 
 fn formatSize(entry: Entry, buffer: []u8) usize {
     const text = switch (entry.kind) {
-        .directory => std.fmt.bufPrint(buffer, "{d} itens", .{entry.child_count}) catch return writeText(buffer, "Pasta"),
+        .directory => return writeText(buffer, "Pasta"),
         .file => std.fmt.bufPrint(buffer, "{d} bytes", .{entry.file_size_bytes}) catch return writeText(buffer, "Arquivo"),
     };
     return text.len;

@@ -224,7 +224,7 @@ pub const App = struct {
             layer_shell,
             wl_surface,
             null,
-            c.ZWLR_LAYER_SHELL_V1_LAYER_TOP,
+            c.ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM,
             "axia-dock",
         ) orelse return error.LayerSurfaceCreateFailed;
 

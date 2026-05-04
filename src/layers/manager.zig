@@ -80,8 +80,21 @@ pub const LayerManager = struct {
         self.surfaces.deinit(self.allocator);
     }
 
-    pub fn handlePointerMotion(self: *LayerManager, time_msec: u32, lx: f64, ly: f64) bool {
-        if (self.hitTest(lx, ly)) |hit| {
+    const PointerBand = enum {
+        above_windows,
+        below_windows,
+    };
+
+    pub fn handlePointerMotionAboveWindows(self: *LayerManager, time_msec: u32, lx: f64, ly: f64) bool {
+        return self.handlePointerMotionForBand(.above_windows, time_msec, lx, ly);
+    }
+
+    pub fn handlePointerMotionBelowWindows(self: *LayerManager, time_msec: u32, lx: f64, ly: f64) bool {
+        return self.handlePointerMotionForBand(.below_windows, time_msec, lx, ly);
+    }
+
+    fn handlePointerMotionForBand(self: *LayerManager, band: PointerBand, time_msec: u32, lx: f64, ly: f64) bool {
+        if (self.hitTest(band, lx, ly)) |hit| {
             if (!c.wlr_seat_pointer_surface_has_focus(self.seat, hit.surface)) {
                 c.wlr_seat_pointer_notify_enter(self.seat, hit.surface, hit.sx, hit.sy);
             } else {
@@ -92,7 +105,7 @@ pub const LayerManager = struct {
         return false;
     }
 
-    pub fn handlePointerButton(
+    pub fn handlePointerButtonAboveWindows(
         self: *LayerManager,
         time_msec: u32,
         button: u32,
@@ -100,7 +113,30 @@ pub const LayerManager = struct {
         lx: f64,
         ly: f64,
     ) bool {
-        if (self.hitTest(lx, ly)) |hit| {
+        return self.handlePointerButtonForBand(.above_windows, time_msec, button, state, lx, ly);
+    }
+
+    pub fn handlePointerButtonBelowWindows(
+        self: *LayerManager,
+        time_msec: u32,
+        button: u32,
+        state: c.enum_wl_pointer_button_state,
+        lx: f64,
+        ly: f64,
+    ) bool {
+        return self.handlePointerButtonForBand(.below_windows, time_msec, button, state, lx, ly);
+    }
+
+    fn handlePointerButtonForBand(
+        self: *LayerManager,
+        band: PointerBand,
+        time_msec: u32,
+        button: u32,
+        state: c.enum_wl_pointer_button_state,
+        lx: f64,
+        ly: f64,
+    ) bool {
+        if (self.hitTest(band, lx, ly)) |hit| {
             if (!c.wlr_seat_pointer_surface_has_focus(self.seat, hit.surface)) {
                 c.wlr_seat_pointer_notify_enter(self.seat, hit.surface, hit.sx, hit.sy);
             }
@@ -186,10 +222,12 @@ pub const LayerManager = struct {
         sy: f64,
     };
 
-    fn hitTest(self: *LayerManager, lx: f64, ly: f64) ?Hit {
-        return self.hitTestTree(self.overlay_root, lx, ly) orelse
-            self.hitTestTree(self.top_root, lx, ly) orelse
-            self.hitTestTree(self.bottom_root, lx, ly);
+    fn hitTest(self: *LayerManager, band: PointerBand, lx: f64, ly: f64) ?Hit {
+        return switch (band) {
+            .above_windows => self.hitTestTree(self.overlay_root, lx, ly) orelse
+                self.hitTestTree(self.top_root, lx, ly),
+            .below_windows => self.hitTestTree(self.bottom_root, lx, ly),
+        };
     }
 
     fn hitTestTree(self: *LayerManager, tree: [*c]c.struct_wlr_scene_tree, lx: f64, ly: f64) ?Hit {

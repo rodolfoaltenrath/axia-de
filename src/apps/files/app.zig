@@ -209,12 +209,12 @@ pub const App = struct {
         };
         const view = self.viewOptions();
         const snapshot = self.browser.snapshot(render.visibleEntryCapacity(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized, view));
-        self.icons.ensureVisibleThumbnails(snapshot);
+        self.icons.ensureVisibleThumbnails(&snapshot);
         render.draw(
             buffer.cr,
             self.current_width,
             self.current_height,
-            snapshot,
+            &snapshot,
             self.hovered,
             self.sidebar_collapsed,
             &self.icons,
@@ -260,12 +260,16 @@ pub const App = struct {
 
     fn updateHover(self: *App) void {
         const view = self.viewOptions();
+        const visible_limit = render.visibleEntryCapacity(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized, view);
+        const current_dir = self.browser.currentDirectory() orelse "";
         const new_hovered = render.hitTest(
             self.current_width,
             self.current_height,
             self.pointer_x,
             self.pointer_y,
-            self.browser.snapshot(render.visibleEntryCapacity(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized, view)),
+            current_dir,
+            self.browser.visibleCount(visible_limit),
+            self.browser.pinnedFolderCount(),
             self.sidebar_collapsed,
             self.mode == .wallpaper_picker,
             dialogKindForRender(self.dialog.kind),

@@ -13,19 +13,22 @@ pub const GlassRegion = region.GlassRegion;
 pub const Manager = struct {
     allocator: std.mem.Allocator,
     output_layout: [*c]c.struct_wlr_output_layout,
-    root: [*c]c.struct_wlr_scene_tree,
+    top_root: [*c]c.struct_wlr_scene_tree,
+    dock_root: [*c]c.struct_wlr_scene_tree,
     quality: GlassQuality = .balanced,
     regions: std.ArrayListUnmanaged(GlassRegion) = .empty,
 
     pub fn init(
         allocator: std.mem.Allocator,
         output_layout: [*c]c.struct_wlr_output_layout,
-        root: [*c]c.struct_wlr_scene_tree,
+        top_root: [*c]c.struct_wlr_scene_tree,
+        dock_root: [*c]c.struct_wlr_scene_tree,
     ) Manager {
         return .{
             .allocator = allocator,
             .output_layout = output_layout,
-            .root = root,
+            .top_root = top_root,
+            .dock_root = dock_root,
         };
     }
 
@@ -37,7 +40,7 @@ pub const Manager = struct {
     }
 
     pub fn rootNode(self: *const Manager) [*c]c.struct_wlr_scene_tree {
-        return self.root;
+        return self.top_root;
     }
 
     pub fn setQuality(self: *Manager, quality: GlassQuality) void {
@@ -172,7 +175,7 @@ pub const Manager = struct {
         errdefer next_buffer.deinit();
 
         if (entry.tree == null) {
-            entry.tree = c.wlr_scene_tree_create(self.root) orelse return error.GlassRegionTreeCreateFailed;
+            entry.tree = c.wlr_scene_tree_create(self.rootFor(entry.kind)) orelse return error.GlassRegionTreeCreateFailed;
         }
         const tree = entry.tree.?;
         c.wlr_scene_node_set_position(&tree.*.node, entry.box.x, entry.box.y);
@@ -193,5 +196,12 @@ pub const Manager = struct {
             old_buffer.deinit();
         }
         entry.buffer = next_buffer;
+    }
+
+    fn rootFor(self: *const Manager, kind: GlassKind) [*c]c.struct_wlr_scene_tree {
+        return switch (kind) {
+            .dock => self.dock_root,
+            .top_bar => self.top_root,
+        };
     }
 };

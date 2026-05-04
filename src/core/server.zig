@@ -115,6 +115,7 @@ pub const Server = struct {
             allocator,
             output_layout,
             scene.glassEffectRoot(),
+            scene.dockGlassEffectRoot(),
         );
         errdefer glass.deinit();
 
@@ -412,9 +413,14 @@ pub const Server = struct {
     fn handlePointerMotion(ctx: ?*anyopaque, time_msec: u32, lx: f64, ly: f64) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
-        if (server.layers.handlePointerMotion(time_msec, lx, ly)) return;
+        if (server.layers.handlePointerMotionAboveWindows(time_msec, lx, ly)) return;
         if (server.settings.handlePointerMotion(lx, ly)) return;
         if (server.desktop_menu.handlePointerMotion(lx, ly)) return;
+        if (server.xdg.hasHitAt(lx, ly)) {
+            server.xdg.handlePointerMotion(time_msec, lx, ly);
+            return;
+        }
+        if (server.layers.handlePointerMotionBelowWindows(time_msec, lx, ly)) return;
         server.xdg.handlePointerMotion(time_msec, lx, ly);
     }
 
@@ -431,9 +437,14 @@ pub const Server = struct {
         if (state == c.WL_POINTER_BUTTON_STATE_PRESSED) {
             server.xdg.dismissLauncherIfOutside(lx, ly);
         }
-        if (server.layers.handlePointerButton(time_msec, button, state, lx, ly)) return;
+        if (server.layers.handlePointerButtonAboveWindows(time_msec, button, state, lx, ly)) return;
         if (server.settings.handlePointerButton(button, state, lx, ly)) return;
         if (server.desktop_menu.handlePointerButton(button, state, lx, ly)) return;
+        if (server.xdg.hasHitAt(lx, ly)) {
+            server.xdg.handlePointerButton(time_msec, button, state, lx, ly, server.input.currentModifiers());
+            return;
+        }
+        if (server.layers.handlePointerButtonBelowWindows(time_msec, button, state, lx, ly)) return;
         if (!server.xdg.hasHitAt(lx, ly) and state == c.WL_POINTER_BUTTON_STATE_PRESSED and button == 0x111) {
             server.xdg.clearDesktopFocus();
             server.desktop_menu.showAt(lx, ly) catch |err| {

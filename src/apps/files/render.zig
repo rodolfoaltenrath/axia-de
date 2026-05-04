@@ -103,7 +103,7 @@ pub fn draw(
     cr: *c.cairo_t,
     width: u32,
     height: u32,
-    snapshot: browser.Snapshot,
+    snapshot: *const browser.Snapshot,
     hovered: Hit,
     sidebar_collapsed: bool,
     sidebar_icons: *const icons.SidebarIcons,
@@ -144,7 +144,9 @@ pub fn hitTest(
     height: u32,
     x: f64,
     y: f64,
-    snapshot: browser.Snapshot,
+    current_dir: []const u8,
+    visible_count: usize,
+    pinned_count: usize,
     sidebar_collapsed: bool,
     picker_mode: bool,
     dialog_kind: DialogKind,
@@ -169,7 +171,7 @@ pub fn hitTest(
     if (toggleSidebarRect().contains(x, y)) return .toggle_sidebar;
 
     if (upRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .up;
-    if (breadcrumbTargetRect(width, height, sidebar_collapsed, snapshot.current_dir, maximized).contains(x, y)) return .breadcrumb_up;
+    if (breadcrumbTargetRect(width, height, sidebar_collapsed, current_dir, maximized).contains(x, y)) return .breadcrumb_up;
     if (previousRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .previous;
     if (nextRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .next;
     if (view.show_details and modifiedHeaderRect(width, height, sidebar_collapsed, maximized).contains(x, y)) return .sort_modified;
@@ -180,13 +182,13 @@ pub fn hitTest(
             return .{ .sidebar = item.target };
         }
     }
-    for (0..snapshot.pinned_count) |index| {
+    for (0..pinned_count) |index| {
         if (pinnedItemRect(sidebar, index).contains(x, y)) {
             return .{ .pinned_folder = index };
         }
     }
 
-    for (0..snapshot.count) |index| {
+    for (0..visible_count) |index| {
         if (entryRect(width, height, index, sidebar_collapsed, maximized, view).contains(x, y)) {
             return .{ .entry = index };
         }
@@ -417,7 +419,7 @@ fn entryRect(width: u32, height: u32, index: usize, collapsed: bool, maximized: 
     };
 }
 
-fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, snapshot: browser.Snapshot, hovered: Hit, sidebar_collapsed: bool, picker_mode: bool, maximized: bool) void {
+fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, snapshot: *const browser.Snapshot, hovered: Hit, sidebar_collapsed: bool, picker_mode: bool, maximized: bool) void {
     _ = snapshot;
     _ = picker_mode;
     chrome.drawWindowShell(cr, width, height, .{
@@ -443,7 +445,7 @@ fn drawFilesMenuBar(cr: *c.cairo_t, width: u32, height: u32, hovered: Hit, sideb
 fn drawSidebar(
     cr: *c.cairo_t,
     sidebar: Rect,
-    snapshot: browser.Snapshot,
+    snapshot: *const browser.Snapshot,
     hovered: Hit,
     collapsed: bool,
     sidebar_icons: *const icons.SidebarIcons,
@@ -503,7 +505,7 @@ fn drawContent(
     width: u32,
     height: u32,
     content: Rect,
-    snapshot: browser.Snapshot,
+    snapshot: *const browser.Snapshot,
     hovered: Hit,
     sidebar_collapsed: bool,
     sidebar_icons: *const icons.SidebarIcons,
@@ -581,7 +583,7 @@ fn drawContent(
     drawLabel(cr, content.x, footer_y + 22, 13, footer, 0.78, 0.79, 0.82);
 }
 
-fn drawScrollbar(cr: *c.cairo_t, rows_area: Rect, snapshot: browser.Snapshot) void {
+fn drawScrollbar(cr: *c.cairo_t, rows_area: Rect, snapshot: *const browser.Snapshot) void {
     if (snapshot.total_count <= snapshot.count or snapshot.count == 0) return;
 
     const track = Rect{
@@ -1017,7 +1019,7 @@ fn drawFilesWindowControl(cr: *c.cairo_t, rect: Rect, kind: []const u8, hovered:
     c.cairo_stroke(cr);
 }
 
-fn drawTooltip(cr: *c.cairo_t, width: u32, height: u32, snapshot: browser.Snapshot, hovered: Hit, sidebar_collapsed: bool, maximized: bool) void {
+fn drawTooltip(cr: *c.cairo_t, width: u32, height: u32, snapshot: *const browser.Snapshot, hovered: Hit, sidebar_collapsed: bool, maximized: bool) void {
     const tooltip = tooltipForHit(width, height, snapshot.current_dir, hovered, sidebar_collapsed, maximized) orelse return;
     const padding_x = 10.0;
     const tooltip_width = textWidth(cr, tooltip.label, 12.5) + padding_x * 2.0;
