@@ -8,7 +8,6 @@ pub const GlassStyle = style.GlassStyle;
 
 pub const GlassRegion = struct {
     kind: GlassKind,
-    instance_id: usize = 0,
     output: [*c]c.struct_wlr_output,
     box: c.struct_wlr_box,
     dirty: bool = true,

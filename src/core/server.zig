@@ -1,18 +1,15 @@
 const std = @import("std");
 const c = @import("../wl.zig").c;
-const ProtocolRegistry = @import("../protocols/registry.zig").ProtocolRegistry;
+const ProtocolGlobals = @import("protocols.zig").ProtocolGlobals;
 const Output = @import("output.zig").Output;
 const SceneManager = @import("../render/scene.zig").SceneManager;
 const GlassManager = @import("../render/glass/manager.zig").Manager;
 const InputManager = @import("../input/manager.zig").InputManager;
 const LayerManager = @import("../layers/manager.zig").LayerManager;
-<<<<<<< HEAD
 const PanelProcess = @import("../panel/process.zig").PanelProcess;
 const DockProcess = @import("../dock/process.zig").DockProcess;
 const LauncherProcess = @import("../apps/launcher/process.zig").LauncherProcess;
 const AppGridProcess = @import("../apps/app_grid/process.zig").AppGridProcess;
-=======
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
 const XdgManager = @import("../shell/xdg.zig").XdgManager;
 const DecorationManager = @import("../shell/decoration.zig").DecorationManager;
 const IpcServer = @import("../ipc/server.zig").IpcServer;
@@ -26,7 +23,6 @@ const SettingsPage = settings_model.Page;
 const SettingsRuntimeState = settings_model.RuntimeState;
 const SettingsPreferencesState = settings_model.PreferencesState;
 const Preferences = @import("../config/preferences.zig");
-<<<<<<< HEAD
 const toast_model = @import("../toast/model.zig");
 
 const log = std.log.scoped(.axia);
@@ -44,13 +40,6 @@ const ScreenshotTask = struct {
         area,
     };
 };
-=======
-const FramePolicy = @import("output.zig").FramePolicy;
-
-const log = std.log.scoped(.axia);
-const shell_restart_stable_ms = 30_000;
-const shell_restart_max_attempts = 5;
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
@@ -59,7 +48,7 @@ pub const Server = struct {
     backend: [*c]c.struct_wlr_backend,
     renderer: [*c]c.struct_wlr_renderer,
     buffer_allocator: [*c]c.struct_wlr_allocator,
-    protocols: ProtocolRegistry,
+    protocols: ProtocolGlobals,
     output_layout: [*c]c.struct_wlr_output_layout,
     scene: SceneManager,
     glass: GlassManager,
@@ -70,15 +59,12 @@ pub const Server = struct {
     shell_supervisor_timer: ?*c.struct_wl_event_source = null,
     input: InputManager,
     layers: LayerManager,
-<<<<<<< HEAD
     panel: PanelProcess,
     dock: DockProcess,
     launcher: LauncherProcess,
     app_grid: AppGridProcess,
     launcher_requested: bool = false,
     app_grid_requested: bool = false,
-=======
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     xdg: XdgManager,
     decorations: DecorationManager,
     ipc: IpcServer,
@@ -86,21 +72,9 @@ pub const Server = struct {
     desktop_menu: DesktopMenu,
     settings: SettingsManager,
     settings_prefs: SettingsPreferencesState,
-<<<<<<< HEAD
     screenshot_task_active: *std.atomic.Value(bool),
-=======
-    glass_debug: bool = false,
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     dock_glass_surface_box: ?c.struct_wlr_box = null,
     dock_surface_height: i32 = 0,
-    auto_glass_sync_pending: bool = false,
-    shell_child: ?std.process.Child = null,
-    shell_command: ?[]u8 = null,
-    shell_restart_timer: ?*c.struct_wl_event_source = null,
-    shell_sigchld_source: ?*c.struct_wl_event_source = null,
-    shell_restart_attempts: u8 = 0,
-    shell_last_spawn_ms: i64 = 0,
-    shell_stopping: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) !Server {
         c.wlr_log_init(c.WLR_ERROR, null);
@@ -129,6 +103,8 @@ pub const Server = struct {
         if (buffer_allocator == null) return error.AllocatorCreateFailed;
         errdefer c.wlr_allocator_destroy(buffer_allocator);
 
+        const protocols = try ProtocolGlobals.init(display, renderer);
+
         const socket_name = c.wl_display_add_socket_auto(display);
         if (socket_name == null) return error.WaylandSocketCreateFailed;
 
@@ -138,28 +114,12 @@ pub const Server = struct {
         var glass = GlassManager.init(
             allocator,
             output_layout,
-            scene.scene,
-            scene.bottomLayerRoot(),
-            scene.windowRoot(),
             scene.glassEffectRoot(),
         );
         errdefer glass.deinit();
 
         var input = try InputManager.init(allocator, display, output_layout);
         errdefer input.deinit();
-
-        var protocols = try ProtocolRegistry.init(
-            allocator,
-            display,
-            backend,
-            renderer,
-            output_layout,
-            input.seat,
-            input.pointer.cursor,
-            input.pointer.xcursor_manager,
-            scene.lockLayerRoot(),
-        );
-        errdefer protocols.deinit();
 
         var layers = try LayerManager.init(
             allocator,
@@ -170,17 +130,14 @@ pub const Server = struct {
             scene.bottomLayerRoot(),
             scene.topLayerRoot(),
             scene.overlayLayerRoot(),
-            protocols.core.layer_shell,
+            protocols.layer_shell,
         );
         errdefer layers.deinit();
 
-<<<<<<< HEAD
         const panel = PanelProcess.init(allocator);
         const dock = DockProcess.init(allocator);
         const launcher = LauncherProcess.init(allocator);
         const app_grid = AppGridProcess.init(allocator);
-=======
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
 
         var xdg = try XdgManager.init(
             allocator,
@@ -249,17 +206,12 @@ pub const Server = struct {
         );
         errdefer settings.deinit();
 
-
         if (wallpaper) |asset| {
             try settings.setCurrentWallpaperPath(asset.source_path);
         }
 
-<<<<<<< HEAD
         const screenshot_task_active = try std.heap.page_allocator.create(std.atomic.Value(bool));
         screenshot_task_active.* = std.atomic.Value(bool).init(false);
-=======
-        const glass_debug = debugFlagEnabled(allocator, "AXIA_DEBUG_GLASS");
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
 
         xdg.setWorkspaceWrap(settings_prefs.workspace_wrap);
         xdg.activateWorkspace(settings_prefs.startup_workspace);
@@ -280,13 +232,10 @@ pub const Server = struct {
             .socket_name = socket_name,
             .input = input,
             .layers = layers,
-<<<<<<< HEAD
             .panel = panel,
             .dock = dock,
             .launcher = launcher,
             .app_grid = app_grid,
-=======
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             .xdg = xdg,
             .decorations = decorations,
             .ipc = ipc,
@@ -294,11 +243,7 @@ pub const Server = struct {
             .desktop_menu = desktop_menu,
             .settings = settings,
             .settings_prefs = settings_prefs,
-<<<<<<< HEAD
             .screenshot_task_active = screenshot_task_active,
-=======
-            .glass_debug = glass_debug,
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
         };
     }
 
@@ -306,32 +251,9 @@ pub const Server = struct {
         self.new_output.notify = handleNewOutput;
         c.wl_signal_add(&self.backend.*.events.new_output, &self.new_output);
         self.listeners_ready = true;
-        self.protocols.setXdgActivationCallback(self, handleActivationFocusSurface);
-        self.protocols.setOutputLayoutAppliedCallback(self, handleOutputLayoutApplied);
-        self.protocols.setOutputPowerAppliedCallback(self, handleOutputPowerApplied);
-        self.protocols.setForeignToplevelActionCallbacks(
-            self,
-            handleForeignActivateView,
-            handleForeignCloseView,
-            handleForeignSetViewMinimized,
-            handleForeignSetViewMaximized,
-            handleForeignSetViewFullscreen,
-        );
-        self.protocols.setWorkspaceActivateCallback(self, handleWorkspaceActivateRequest);
-        self.xdg.setViewCallbacks(
-            self,
-            handleViewRegistered,
-            handleViewUpdated,
-            handleViewUnregistered,
-        );
-        self.xdg.setWorkspaceCallback(self, handleWorkspaceChanged);
-        const workspace_snapshot = self.xdg.workspaceSnapshot();
-        self.protocols.publishWorkspaceState(workspace_snapshot.current, workspace_snapshot.count);
         self.input.setupListeners(self.backend);
         self.input.setPointerCallbacks(self, handlePointerMotion, handlePointerButton);
         self.input.setShortcutHandler(self, handleShortcut);
-        self.input.setShortcutAllowedCallback(self, shortcutsAllowed);
-        self.input.setActivityNotifier(self, handleInputActivity);
         self.layers.setLayoutCallback(self, handleLayerLayoutChanged);
         self.layers.setupListeners();
         self.xdg.setupListeners();
@@ -359,16 +281,6 @@ pub const Server = struct {
     pub fn deinit(self: *Server) void {
         _ = self.event_loop;
 
-        self.shell_stopping = true;
-        if (self.shell_restart_timer) |source| {
-            _ = c.wl_event_source_remove(source);
-            self.shell_restart_timer = null;
-        }
-        if (self.shell_sigchld_source) |source| {
-            _ = c.wl_event_source_remove(source);
-            self.shell_sigchld_source = null;
-        }
-
         if (self.listeners_ready) {
             c.wl_list_remove(&self.new_output.link);
         }
@@ -387,22 +299,10 @@ pub const Server = struct {
         self.decorations.deinit();
         self.ipc.deinit();
         self.layers.deinit();
-<<<<<<< HEAD
         self.panel.deinit();
         self.dock.deinit();
         self.launcher.deinit();
         self.app_grid.deinit();
-=======
-        if (self.shell_child) |*child| {
-            _ = child.kill() catch {};
-            _ = child.wait() catch {};
-            self.shell_child = null;
-        }
-        if (self.shell_command) |command| {
-            self.allocator.free(command);
-            self.shell_command = null;
-        }
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
         self.input.deinit();
         if (self.wallpaper) |wallpaper| wallpaper.deinit();
         self.desktop_menu.deinit();
@@ -411,7 +311,7 @@ pub const Server = struct {
         std.heap.page_allocator.destroy(self.screenshot_task_active);
 
         self.scene.deinit();
-        self.protocols.deinit();
+        _ = self.protocols;
         c.wlr_output_layout_destroy(self.output_layout);
         c.wlr_allocator_destroy(self.buffer_allocator);
         c.wlr_renderer_destroy(self.renderer);
@@ -421,27 +321,18 @@ pub const Server = struct {
 
     pub fn run(self: *Server) !void {
         try self.ipc.start(self.event_loop, self.socket_name);
-        self.setupShellSupervisor();
 
         if (!c.wlr_backend_start(self.backend)) {
             return error.BackendStartFailed;
         }
 
-<<<<<<< HEAD
         self.panel.spawn(self.socket_name, self.ipc.path());
         self.dock.spawn(self.socket_name, self.ipc.path());
         try self.startShellSupervisor();
-=======
-        self.spawnShellV2() catch |err| {
-            log.err("failed to spawn shell v2: {}", .{err});
-        };
-
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
         log.info("Axia-DE core is running on WAYLAND_DISPLAY={s}", .{std.mem.span(self.socket_name)});
         c.wl_display_run(self.display);
     }
 
-<<<<<<< HEAD
     fn startShellSupervisor(self: *Server) !void {
         if (self.shell_supervisor_timer != null) return;
 
@@ -455,165 +346,6 @@ pub const Server = struct {
             self.shell_supervisor_timer = null;
             return error.ShellSupervisorTimerStartFailed;
         }
-=======
-    fn spawnShellV2(self: *Server) !void {
-        const shell_mode = std.process.getEnvVarOwned(self.allocator, "AXIA_SHELL_MODE") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => null,
-            else => return err,
-        };
-        defer if (shell_mode) |value| self.allocator.free(value);
-
-        if (shell_mode) |value| {
-            if (std.ascii.eqlIgnoreCase(value, "legacy") or
-                std.ascii.eqlIgnoreCase(value, "off") or
-                std.ascii.eqlIgnoreCase(value, "none"))
-            {
-                log.info("AXIA_SHELL_MODE={s} set; skipping v2 shell spawn", .{value});
-                return;
-            }
-        }
-
-        const external = std.process.getEnvVarOwned(self.allocator, "AXIA_EXTERNAL_SHELL_CMD") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => null,
-            else => return err,
-        };
-        defer if (external) |value| self.allocator.free(value);
-
-        const fallback = "./shell-v2/scripts/run-shell-suite.sh";
-        const command = if (external) |value| value else fallback;
-
-        if (self.shell_command) |previous| {
-            self.allocator.free(previous);
-        }
-        self.shell_command = try self.allocator.dupe(u8, command);
-        try self.startShellCommand(command);
-    }
-
-    fn setupShellSupervisor(self: *Server) void {
-        if (self.shell_sigchld_source != null) return;
-        const source = c.wl_event_loop_add_signal(self.event_loop, c.SIGCHLD, handleShellSigchld, self);
-        if (source == null) {
-            log.warn("failed to install SIGCHLD handler; shell v2 will not be supervised", .{});
-            return;
-        }
-        self.shell_sigchld_source = source;
-    }
-
-    fn startShellCommand(self: *Server, command: []const u8) !void {
-        if (self.shell_child != null) return;
-
-        var env_map = std.process.EnvMap.init(self.allocator);
-        defer env_map.deinit();
-
-        const inherited = std.process.getEnvMap(self.allocator) catch |err| {
-            log.err("failed to read env for shell v2: {}", .{err});
-            return err;
-        };
-        defer {
-            var copy = inherited;
-            copy.deinit();
-        }
-
-        var it = inherited.iterator();
-        while (it.next()) |entry| {
-            env_map.put(entry.key_ptr.*, entry.value_ptr.*) catch |err| {
-                log.err("failed to copy env for shell v2: {}", .{err});
-                return err;
-            };
-        }
-
-        env_map.put("WAYLAND_DISPLAY", std.mem.span(self.socket_name)) catch |err| {
-            log.err("failed to set WAYLAND_DISPLAY for shell v2: {}", .{err});
-            return err;
-        };
-        env_map.put("AXIA_IPC_SOCKET", self.ipc.path()) catch |err| {
-            log.err("failed to set AXIA_IPC_SOCKET for shell v2: {}", .{err});
-            return err;
-        };
-
-        const argv = [_][]const u8{ "sh", "-lc", command };
-        var child = std.process.Child.init(&argv, self.allocator);
-        child.stdin_behavior = .Ignore;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-        child.env_map = &env_map;
-
-        child.spawn() catch |err| {
-            log.err("failed to spawn shell v2 command '{s}': {}", .{ command, err });
-            return err;
-        };
-
-        self.shell_child = child;
-        self.shell_last_spawn_ms = std.time.milliTimestamp();
-        log.info("shell v2 spawned via '{s}'", .{command});
-    }
-
-    fn handleShellSigchld(_: c_int, data: ?*anyopaque) callconv(.c) c_int {
-        const raw_server = data orelse return 0;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        server.reapShellChild();
-        return 0;
-    }
-
-    fn reapShellChild(self: *Server) void {
-        const child = self.shell_child orelse return;
-
-        var status: c_int = 0;
-        const pid = c.waitpid(@intCast(child.id), &status, c.WNOHANG);
-        if (pid == 0) return;
-        if (pid < 0) {
-            log.warn("failed to reap shell v2 child", .{});
-            self.shell_child = null;
-            return;
-        }
-
-        self.shell_child = null;
-        if (self.shell_stopping) return;
-
-        log.warn("shell v2 exited with status {}; scheduling restart", .{status});
-        self.scheduleShellRestart();
-    }
-
-    fn scheduleShellRestart(self: *Server) void {
-        if (self.shell_command == null) return;
-
-        const now_ms = std.time.milliTimestamp();
-        if (now_ms - self.shell_last_spawn_ms > shell_restart_stable_ms) {
-            self.shell_restart_attempts = 0;
-        }
-
-        if (self.shell_restart_attempts >= shell_restart_max_attempts) {
-            log.err("shell v2 restart limit reached; leaving it stopped", .{});
-            return;
-        }
-
-        self.shell_restart_attempts += 1;
-        const delay_ms: c_int = @intCast(@min(@as(u32, self.shell_restart_attempts) * 750, 5_000));
-
-        if (self.shell_restart_timer == null) {
-            const source = c.wl_event_loop_add_timer(self.event_loop, handleShellRestartTimer, self);
-            if (source == null) {
-                log.err("failed to create shell v2 restart timer", .{});
-                return;
-            }
-            self.shell_restart_timer = source;
-        }
-
-        _ = c.wl_event_source_timer_update(self.shell_restart_timer.?, delay_ms);
-    }
-
-    fn handleShellRestartTimer(data: ?*anyopaque) callconv(.c) c_int {
-        const raw_server = data orelse return 0;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        if (server.shell_stopping or server.shell_child != null) return 0;
-
-        const command = server.shell_command orelse return 0;
-        server.startShellCommand(command) catch |err| {
-            log.err("failed to restart shell v2: {}", .{err});
-            server.scheduleShellRestart();
-        };
-        return 0;
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     }
 
     fn registerOutput(self: *Server, wlr_output: [*c]c.struct_wlr_output) !void {
@@ -630,15 +362,12 @@ pub const Server = struct {
             wlr_output,
             self,
             unregisterOutputCallback,
-            self,
-            evaluateFramePolicy,
         );
         errdefer self.allocator.destroy(output);
 
         try self.outputs.append(self.allocator, output);
         try output.setup();
 
-<<<<<<< HEAD
         if (self.xdg.primary_output == null) {
             self.xdg.setPrimaryOutput(wlr_output);
         }
@@ -653,26 +382,15 @@ pub const Server = struct {
         }
         self.updateShellUsableArea();
         self.syncGlassRegions();
-=======
-        self.syncPrimaryOutputs();
-        self.protocols.publishOutputConfiguration(self.outputs.items) catch |err| {
-            log.err("failed to publish current output configuration: {}", .{err});
-        };
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     }
 
     fn unregisterOutput(self: *Server, target: *Output) void {
         for (self.outputs.items, 0..) |output, index| {
             if (output == target) {
                 _ = self.outputs.swapRemove(index);
-                break;
+                return;
             }
         }
-
-        self.syncPrimaryOutputs();
-        self.protocols.publishOutputConfiguration(self.outputs.items) catch |err| {
-            log.err("failed to refresh output configuration after unregister: {}", .{err});
-        };
     }
 
     fn handleNewOutput(listener: [*c]c.struct_wl_listener, data: ?*anyopaque) callconv(.c) void {
@@ -691,50 +409,13 @@ pub const Server = struct {
         typed.unregisterOutput(output);
     }
 
-    fn handlePointerMotion(
-        ctx: ?*anyopaque,
-        time_msec: u32,
-        old_x: f64,
-        old_y: f64,
-        lx: f64,
-        ly: f64,
-        dx: f64,
-        dy: f64,
-        dx_unaccel: f64,
-        dy_unaccel: f64,
-    ) void {
+    fn handlePointerMotion(ctx: ?*anyopaque, time_msec: u32, lx: f64, ly: f64) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
-        var current_lx = lx;
-        var current_ly = ly;
-        server.protocols.sendRelativePointerMotion(time_msec, dx, dy, dx_unaccel, dy_unaccel);
-        if (server.protocols.handleSessionLockPointerMotion(time_msec, current_lx, current_ly)) return;
-        if (server.protocols.applyPointerConstraintMotion(old_x, old_y, &current_lx, &current_ly) == .locked) {
-            server.protocols.syncPointerConstraintFocus(server.input.seat.*.pointer_state.focused_surface, current_lx, current_ly);
-            server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
-            return;
-        }
-        if (server.layers.handlePointerMotion(time_msec, current_lx, current_ly)) {
-            server.protocols.syncPointerConstraintFocus(server.input.seat.*.pointer_state.focused_surface, current_lx, current_ly);
-            server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
-            return;
-        }
-        if (server.settings.handlePointerMotion(current_lx, current_ly)) {
-            server.protocols.syncPointerConstraintFocus(server.input.seat.*.pointer_state.focused_surface, current_lx, current_ly);
-            server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
-            return;
-        }
-        if (server.desktop_menu.handlePointerMotion(current_lx, current_ly)) {
-            server.protocols.syncPointerConstraintFocus(server.input.seat.*.pointer_state.focused_surface, current_lx, current_ly);
-            server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
-            return;
-        }
-        if (!server.xdg.hasHitAt(current_lx, current_ly)) {
-            server.protocols.resetCursorToDefault();
-        }
-        server.xdg.handlePointerMotion(time_msec, current_lx, current_ly);
-        server.protocols.syncPointerConstraintFocus(server.input.seat.*.pointer_state.focused_surface, current_lx, current_ly);
-        server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
+        if (server.layers.handlePointerMotion(time_msec, lx, ly)) return;
+        if (server.settings.handlePointerMotion(lx, ly)) return;
+        if (server.desktop_menu.handlePointerMotion(lx, ly)) return;
+        server.xdg.handlePointerMotion(time_msec, lx, ly);
     }
 
     fn handlePointerButton(
@@ -747,263 +428,28 @@ pub const Server = struct {
     ) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
-        var current_lx = lx;
-        var current_ly = ly;
-        if (server.protocols.handleSessionLockPointerButton(time_msec, button, state, current_lx, current_ly)) return;
-        _ = server.protocols.applyPointerConstraintMotion(current_lx, current_ly, &current_lx, &current_ly);
         if (state == c.WL_POINTER_BUTTON_STATE_PRESSED) {
-            server.xdg.dismissLauncherIfOutside(current_lx, current_ly);
+            server.xdg.dismissLauncherIfOutside(lx, ly);
         }
-        if (server.layers.handlePointerButton(time_msec, button, state, current_lx, current_ly)) {
-            server.protocols.syncPointerConstraintFocus(server.input.seat.*.pointer_state.focused_surface, current_lx, current_ly);
-            server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
-            return;
-        }
-        if (server.settings.handlePointerButton(button, state, current_lx, current_ly)) {
-            server.protocols.syncPointerConstraintFocus(server.input.seat.*.pointer_state.focused_surface, current_lx, current_ly);
-            server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
-            return;
-        }
-        if (server.desktop_menu.handlePointerButton(button, state, current_lx, current_ly)) {
-            server.protocols.syncPointerConstraintFocus(server.input.seat.*.pointer_state.focused_surface, current_lx, current_ly);
-            server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
-            return;
-        }
-        if (!server.xdg.hasHitAt(current_lx, current_ly) and state == c.WL_POINTER_BUTTON_STATE_PRESSED and button == 0x111) {
+        if (server.layers.handlePointerButton(time_msec, button, state, lx, ly)) return;
+        if (server.settings.handlePointerButton(button, state, lx, ly)) return;
+        if (server.desktop_menu.handlePointerButton(button, state, lx, ly)) return;
+        if (!server.xdg.hasHitAt(lx, ly) and state == c.WL_POINTER_BUTTON_STATE_PRESSED and button == 0x111) {
             server.xdg.clearDesktopFocus();
-            server.desktop_menu.showAt(current_lx, current_ly) catch |err| {
+            server.desktop_menu.showAt(lx, ly) catch |err| {
                 log.err("failed to show desktop menu: {}", .{err});
             };
-            server.protocols.syncPointerConstraintFocus(server.input.seat.*.pointer_state.focused_surface, current_lx, current_ly);
-            server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
             return;
         }
-        server.xdg.handlePointerButton(time_msec, button, state, current_lx, current_ly, server.input.currentModifiers());
-        server.protocols.syncPointerConstraintFocus(server.input.seat.*.pointer_state.focused_surface, current_lx, current_ly);
-        server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
+        server.xdg.handlePointerButton(time_msec, button, state, lx, ly, server.input.currentModifiers());
     }
 
     fn handleLayerLayoutChanged(ctx: ?*anyopaque, usable_area: c.struct_wlr_box) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
         _ = usable_area;
-<<<<<<< HEAD
         server.updateShellUsableArea();
         server.syncGlassRegions();
-=======
-        server.xdg.setUsableArea(server.effectiveUsableArea());
-    }
-
-    const AutoGlassSpec = struct {
-        kind: @import("../render/glass/manager.zig").GlassKind,
-        box: c.struct_wlr_box,
-    };
-
-    fn handleLayerSurfaceStateChanged(ctx: ?*anyopaque, layer_surface: *@import("../layers/surface.zig").LayerSurface) void {
-        const raw_server = ctx orelse return;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        _ = layer_surface;
-        server.scheduleAutoGlassSync();
-    }
-
-    fn handleActivationFocusSurface(ctx: ?*anyopaque, surface: [*c]c.struct_wlr_surface) bool {
-        const raw_server = ctx orelse return false;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        return server.xdg.focusSurface(surface);
-    }
-
-    fn handleOutputLayoutApplied(ctx: ?*anyopaque) void {
-        const raw_server = ctx orelse return;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        server.syncPrimaryOutputs();
-        server.protocols.reconfigureSessionLockSurfaces();
-        server.protocols.publishOutputConfiguration(server.outputs.items) catch |err| {
-            log.err("failed to publish output configuration after apply: {}", .{err});
-        };
-    }
-
-    fn handleOutputPowerApplied(ctx: ?*anyopaque, _: [*c]c.struct_wlr_output, _: bool) void {
-        const raw_server = ctx orelse return;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        server.syncPrimaryOutputs();
-        server.protocols.publishOutputConfiguration(server.outputs.items) catch |err| {
-            log.err("failed to publish output configuration after power change: {}", .{err});
-        };
-    }
-
-    fn handleViewRegistered(ctx: ?*anyopaque, view: *@import("../shell/view.zig").View, focused: bool) void {
-        const raw_server = ctx orelse return;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        server.protocols.registerForeignToplevelView(view, focused, server.xdg.primary_output);
-        server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
-    }
-
-    fn handleViewUpdated(ctx: ?*anyopaque, view: *@import("../shell/view.zig").View, focused: bool) void {
-        const raw_server = ctx orelse return;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        server.protocols.syncForeignToplevelView(view, focused, server.xdg.primary_output);
-        server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
-    }
-
-    fn handleViewUnregistered(ctx: ?*anyopaque, view: *@import("../shell/view.zig").View) void {
-        const raw_server = ctx orelse return;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        server.protocols.unregisterForeignToplevelView(view);
-        server.protocols.syncKeyboardShortcutsInhibitFocus(server.input.seat.*.keyboard_state.focused_surface);
-    }
-
-    fn handleWorkspaceChanged(ctx: ?*anyopaque, current: usize, count: usize) void {
-        const raw_server = ctx orelse return;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        server.protocols.publishWorkspaceState(current, count);
-    }
-
-    fn handleWorkspaceActivateRequest(ctx: ?*anyopaque, workspace_index: usize) void {
-        const raw_server = ctx orelse return;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        server.xdg.activateWorkspace(workspace_index);
-    }
-
-    fn handleForeignActivateView(ctx: ?*anyopaque, view: *@import("../shell/view.zig").View) void {
-        const raw_server = ctx orelse return;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        _ = server.xdg.focusSurface(view.xdg_surface.*.surface);
-    }
-
-    fn handleForeignCloseView(ctx: ?*anyopaque, view: *@import("../shell/view.zig").View) void {
-        _ = ctx;
-        c.wlr_xdg_toplevel_send_close(view.toplevel);
-    }
-
-    fn handleForeignSetViewMinimized(ctx: ?*anyopaque, view: *@import("../shell/view.zig").View, minimized: bool) void {
-        _ = ctx;
-        view.setMinimized(minimized);
-    }
-
-    fn handleForeignSetViewMaximized(ctx: ?*anyopaque, view: *@import("../shell/view.zig").View, maximized: bool) void {
-        _ = ctx;
-        view.setMaximized(maximized);
-    }
-
-    fn handleForeignSetViewFullscreen(ctx: ?*anyopaque, view: *@import("../shell/view.zig").View, fullscreen: bool) void {
-        _ = ctx;
-        view.setFullscreen(fullscreen);
-    }
-
-    fn syncPrimaryOutputs(self: *Server) void {
-        const primary_output = c.wlr_output_layout_get_center_output(self.output_layout) orelse blk: {
-            if (self.outputs.items.len > 0) break :blk self.outputs.items[0].wlr_output;
-            break :blk null;
-        };
-
-        if (primary_output == null) {
-            self.xdg.primary_output = null;
-            self.layers.primary_output = null;
-            self.desktop_menu.primary_output = null;
-            self.settings.primary_output = null;
-            return;
-        }
-
-        self.xdg.setPrimaryOutput(primary_output.?);
-        self.layers.setPrimaryOutput(primary_output.?);
-        self.desktop_menu.setPrimaryOutput(primary_output.?);
-        self.settings.setPrimaryOutput(primary_output.?);
-        self.protocols.reconfigureSessionLockSurfaces();
-        self.xdg.setUsableArea(self.effectiveUsableArea());
-        self.syncGlassRegions();
-    }
-
-    fn effectiveUsableArea(self: *const Server) c.struct_wlr_box {
-        var usable_area = self.layers.getUsableArea();
-        const output = if (self.layers.primary_output) |primary|
-            primary
-        else
-            self.xdg.primary_output orelse return usable_area;
-
-        if (self.dock_glass_surface_box) |surface_box| {
-            var full_area = std.mem.zeroes(c.struct_wlr_box);
-            c.wlr_output_layout_get_box(self.output_layout, output, &full_area);
-            if (full_area.width > 0 and full_area.height > 0 and self.dock_surface_height > 0) {
-                const dock_top = full_area.y + full_area.height - self.dock_surface_height + surface_box.y;
-                const usable_bottom = usable_area.y + usable_area.height;
-                if (dock_top > usable_area.y and dock_top < usable_bottom) {
-                    usable_area.height = dock_top - usable_area.y;
-                }
-            }
-        }
-
-        return usable_area;
-    }
-
-    fn handleInputActivity(ctx: ?*anyopaque) void {
-        const raw_server = ctx orelse return;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        server.protocols.notifyInputActivity();
-    }
-
-    const FramePolicyScan = struct {
-        server: *Server,
-        allow_tearing: bool = false,
-        saw_async_hint: bool = false,
-        saw_vsync_hint: bool = false,
-        saw_game_content: bool = false,
-    };
-
-    fn evaluateFramePolicy(
-        ctx: ?*anyopaque,
-        _: [*c]c.struct_wlr_output,
-        scene_output: [*c]c.struct_wlr_scene_output,
-    ) FramePolicy {
-        const raw_server = ctx orelse return .{};
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-
-        var scan = FramePolicyScan{
-            .server = server,
-        };
-        c.wlr_scene_output_for_each_buffer(scene_output, inspectFramePolicyBuffer, &scan);
-
-        return .{
-            .allow_tearing = scan.allow_tearing,
-        };
-    }
-
-    fn inspectFramePolicyBuffer(
-        scene_buffer: [*c]c.struct_wlr_scene_buffer,
-        _: c_int,
-        _: c_int,
-        user_data: ?*anyopaque,
-    ) callconv(.c) void {
-        const raw_scan = user_data orelse return;
-        const scan: *FramePolicyScan = @ptrCast(@alignCast(raw_scan));
-        const scene_surface = c.wlr_scene_surface_try_from_buffer(scene_buffer) orelse return;
-        const surface = scene_surface.*.surface orelse return;
-
-        const tearing_hint = scan.server.protocols.surfaceTearingHint(surface);
-        switch (tearing_hint) {
-            c.WP_TEARING_CONTROL_V1_PRESENTATION_HINT_ASYNC => {
-                scan.saw_async_hint = true;
-                scan.allow_tearing = true;
-            },
-            c.WP_TEARING_CONTROL_V1_PRESENTATION_HINT_VSYNC => {
-                scan.saw_vsync_hint = true;
-            },
-            else => {},
-        }
-
-        const content_type = scan.server.protocols.surfaceContentType(surface);
-        switch (content_type) {
-            c.WP_CONTENT_TYPE_V1_TYPE_GAME => {
-                scan.saw_game_content = true;
-            },
-            else => {},
-        }
-
-        // Prefer explicit tearing hints, but treat game content as a soft
-        // low-latency signal when no visible surface asked for vsync.
-        if (!scan.allow_tearing and scan.saw_game_content and !scan.saw_vsync_hint) {
-            scan.allow_tearing = true;
-        }
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     }
 
     fn updateShellUsableArea(self: *Server) void {
@@ -1114,152 +560,26 @@ pub const Server = struct {
         }
     }
 
-    fn scheduleAutoGlassSync(self: *Server) void {
-        if (self.auto_glass_sync_pending) return;
-        self.auto_glass_sync_pending = true;
-        _ = c.wl_event_loop_add_idle(self.event_loop, handleAutoGlassSyncIdle, self);
-    }
-
-    fn handleAutoGlassSyncIdle(data: ?*anyopaque) callconv(.c) void {
-        const raw_server = data orelse return;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        server.auto_glass_sync_pending = false;
-        server.rebuildAutoGlassRegions();
-    }
-
-    fn rebuildAutoGlassRegions(self: *Server) void {
-        for (self.outputs.items) |output| {
-            self.glass.removeDynamicInstancesForOutput(.top_bar, output.wlr_output);
-            self.glass.removeDynamicInstancesForOutput(.shell_overlay, output.wlr_output);
-        }
-
-        for (self.layers.surfacesSlice()) |layer_surface| {
-            const output = layer_surface.output() orelse continue;
-            const instance_id = @intFromPtr(layer_surface);
-            const namespace = layer_surface.namespace();
-
-            if (self.classifyAutoGlassSurface(layer_surface)) |spec| {
-                if (self.glass_debug) {
-                    log.debug(
-                        "auto-glass attach namespace={s} kind={s} box=({}, {}) {}x{}",
-                        .{ namespace, @tagName(spec.kind), spec.box.x, spec.box.y, spec.box.width, spec.box.height },
-                    );
-                }
-                self.glass.registerRegionInstance(spec.kind, instance_id, output, spec.box) catch |err| {
-                    log.err("failed to register auto-glass region: {}", .{err});
-                };
-            } else if (self.glass_debug and namespace.len > 0) {
-                log.debug("auto-glass skip namespace={s}", .{namespace});
-            }
-        }
-
-        for (self.outputs.items) |output| {
-            self.glass.refreshOutput(output.wlr_output, self.wallpaper) catch |err| {
-                log.err("failed to refresh auto-glass output: {}", .{err});
-            };
-        }
-    }
-
-    fn classifyAutoGlassSurface(
-        self: *Server,
-        layer_surface: *@import("../layers/surface.zig").LayerSurface,
-    ) ?AutoGlassSpec {
-        const output = layer_surface.output() orelse return null;
-        const box = layer_surface.currentBox() orelse return null;
-        if (!layer_surface.isMapped()) return null;
-
-        const namespace = layer_surface.namespace();
-        const layer = layer_surface.layer();
-        const anchor = layer_surface.anchor();
-        const exclusive_zone = layer_surface.exclusiveZone();
-
-        var output_box = std.mem.zeroes(c.struct_wlr_box);
-        c.wlr_output_layout_get_box(self.output_layout, output, &output_box);
-        if (output_box.width <= 0 or output_box.height <= 0) return null;
-
-        const anchored_top = (anchor & c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) != 0;
-        const anchored_left = (anchor & c.ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT) != 0;
-        const anchored_right = (anchor & c.ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT) != 0;
-        const almost_full_width = box.width >= output_box.width - 24;
-
-        if ((layer == c.ZWLR_LAYER_SHELL_V1_LAYER_TOP or layer == c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY) and
-            anchored_top and anchored_left and anchored_right and exclusive_zone > 0 and almost_full_width)
-        {
-            return .{
-                .kind = .top_bar,
-                .box = box,
-            };
-        }
-
-        if (namespaceMatches(namespace, &.{ "waybar", "axia-panel", "bar", "ags-bar", "astal-bar" }) and anchored_top) {
-            return .{
-                .kind = .top_bar,
-                .box = box,
-            };
-        }
-
-        if (namespaceMatches(namespace, &.{ "fuzzel", "mako", "launcher", "notification", "astal", "ags", "wofi", "walker", "tofi", "rofi" }) or
-            (layer == c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY and exclusive_zone <= 0))
-        {
-            return .{
-                .kind = .shell_overlay,
-                .box = box,
-            };
-        }
-
-        return null;
-    }
-
-    fn namespaceMatches(namespace: []const u8, needles: []const []const u8) bool {
-        for (needles) |needle| {
-            if (std.ascii.indexOfIgnoreCase(namespace, needle) != null) return true;
-        }
-        return false;
-    }
-
-    fn debugFlagEnabled(allocator: std.mem.Allocator, name: []const u8) bool {
-        const value = std.process.getEnvVarOwned(allocator, name) catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => return false,
-            else => return false,
-        };
-        defer allocator.free(value);
-
-        return std.mem.eql(u8, value, "1") or
-            std.ascii.eqlIgnoreCase(value, "true") or
-            std.ascii.eqlIgnoreCase(value, "yes") or
-            std.ascii.eqlIgnoreCase(value, "on");
-    }
-
     fn ipcUpdateDockGlass(ctx: ?*anyopaque, surface_box: c.struct_wlr_box, surface_height: i32) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
         if (surface_box.width <= 0 or surface_box.height <= 0) {
             server.dock_glass_surface_box = null;
             server.dock_surface_height = surface_height;
-<<<<<<< HEAD
             server.updateShellUsableArea();
-=======
-            server.xdg.setUsableArea(server.effectiveUsableArea());
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             server.syncGlassRegions();
             return;
         }
         server.dock_glass_surface_box = surface_box;
         server.dock_surface_height = surface_height;
-<<<<<<< HEAD
         server.updateShellUsableArea();
-=======
-        server.xdg.setUsableArea(server.effectiveUsableArea());
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
         server.syncGlassRegions();
     }
-
 
     fn handleShortcut(ctx: ?*anyopaque, modifiers: u32, sym: c.xkb_keysym_t) bool {
         const raw_server = ctx orelse return false;
         const server: *Server = @ptrCast(@alignCast(raw_server));
 
-<<<<<<< HEAD
         if (sym == c.XKB_KEY_Print and (modifiers & c.WLR_MODIFIER_LOGO) != 0) {
             server.captureAreaScreenshot();
             return true;
@@ -1269,9 +589,6 @@ pub const Server = struct {
             server.captureFocusedWindowScreenshot();
             return true;
         }
-=======
-        if (server.protocols.sessionLockActive()) return false;
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
 
         if (sym == c.XKB_KEY_space and (modifiers & c.WLR_MODIFIER_ALT) != 0) {
             server.toggleLauncher();
@@ -1320,12 +637,6 @@ pub const Server = struct {
             },
             else => false,
         };
-    }
-
-    fn shortcutsAllowed(ctx: ?*anyopaque) bool {
-        const raw_server = ctx orelse return true;
-        const server: *Server = @ptrCast(@alignCast(raw_server));
-        return !server.protocols.keyboardShortcutsInhibited();
     }
 
     fn ipcGetWorkspaceState(ctx: ?*anyopaque) IpcWorkspaceSnapshot {
@@ -1447,70 +758,12 @@ pub const Server = struct {
     }
 
     fn toggleLauncher(self: *Server) void {
-<<<<<<< HEAD
         if (self.xdg.dismissLauncher()) {
             self.launcher_requested = false;
             return;
         }
         self.launcher_requested = true;
         self.launcher.spawn(self.socket_name, self.ipc.path());
-=======
-        if (self.xdg.dismissLauncher()) return;
-        self.spawnLauncherV2() catch |err| {
-            log.err("failed to spawn launcher v2: {}", .{err});
-        };
-    }
-
-    fn spawnLauncherV2(self: *Server) !void {
-        const external = std.process.getEnvVarOwned(self.allocator, "AXIA_V2_LAUNCHER_CMD") catch |err| switch (err) {
-            error.EnvironmentVariableNotFound => null,
-            else => return err,
-        };
-        defer if (external) |value| self.allocator.free(value);
-
-        const fallback = "./shell-v2/scripts/run-axia-launcher.sh";
-        const command = if (external) |value| value else fallback;
-
-        var env_map = std.process.EnvMap.init(self.allocator);
-        defer env_map.deinit();
-
-        const inherited = std.process.getEnvMap(self.allocator) catch |err| {
-            log.err("failed to read env for launcher v2: {}", .{err});
-            return;
-        };
-        defer {
-            var copy = inherited;
-            copy.deinit();
-        }
-
-        var it = inherited.iterator();
-        while (it.next()) |entry| {
-            env_map.put(entry.key_ptr.*, entry.value_ptr.*) catch |err| {
-                log.err("failed to copy env for launcher v2: {}", .{err});
-                return;
-            };
-        }
-
-        env_map.put("WAYLAND_DISPLAY", std.mem.span(self.socket_name)) catch |err| {
-            log.err("failed to set WAYLAND_DISPLAY for launcher v2: {}", .{err});
-            return;
-        };
-        env_map.put("AXIA_IPC_SOCKET", self.ipc.path()) catch |err| {
-            log.err("failed to set AXIA_IPC_SOCKET for launcher v2: {}", .{err});
-            return;
-        };
-
-        const argv = [_][]const u8{ "sh", "-lc", command };
-        var child = std.process.Child.init(&argv, self.allocator);
-        child.stdin_behavior = .Ignore;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-        child.env_map = &env_map;
-        child.spawn() catch |err| {
-            log.err("failed to spawn launcher v2 command '{s}': {}", .{ command, err });
-            return;
-        };
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     }
 
     fn toggleAppGrid(self: *Server) void {

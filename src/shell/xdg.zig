@@ -15,11 +15,6 @@ const Position = struct {
     y: i32,
 };
 
-pub const ViewRegisteredCallback = *const fn (?*anyopaque, *View, bool) void;
-pub const ViewUpdatedCallback = *const fn (?*anyopaque, *View, bool) void;
-pub const ViewUnregisteredCallback = *const fn (?*anyopaque, *View) void;
-pub const WorkspaceChangedCallback = *const fn (?*anyopaque, usize, usize) void;
-
 pub const XdgManager = struct {
     allocator: std.mem.Allocator,
     seat: [*c]c.struct_wlr_seat,
@@ -43,12 +38,6 @@ pub const XdgManager = struct {
     snap_preview_tree: ?[*c]c.struct_wlr_scene_tree = null,
     snap_target: SnapTarget = .none,
     hovered_chrome_view: ?*View = null,
-    view_events_ctx: ?*anyopaque = null,
-    view_registered_cb: ?ViewRegisteredCallback = null,
-    view_updated_cb: ?ViewUpdatedCallback = null,
-    view_unregistered_cb: ?ViewUnregisteredCallback = null,
-    workspace_events_ctx: ?*anyopaque = null,
-    workspace_changed_cb: ?WorkspaceChangedCallback = null,
     new_toplevel: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
     listeners_ready: bool = false,
 
@@ -77,28 +66,6 @@ pub const XdgManager = struct {
         self.primary_output = output;
     }
 
-    pub fn setViewCallbacks(
-        self: *XdgManager,
-        ctx: ?*anyopaque,
-        registered_cb: ViewRegisteredCallback,
-        updated_cb: ViewUpdatedCallback,
-        unregistered_cb: ViewUnregisteredCallback,
-    ) void {
-        self.view_events_ctx = ctx;
-        self.view_registered_cb = registered_cb;
-        self.view_updated_cb = updated_cb;
-        self.view_unregistered_cb = unregistered_cb;
-    }
-
-    pub fn setWorkspaceCallback(
-        self: *XdgManager,
-        ctx: ?*anyopaque,
-        callback: WorkspaceChangedCallback,
-    ) void {
-        self.workspace_events_ctx = ctx;
-        self.workspace_changed_cb = callback;
-    }
-
     pub fn activeWorkspace(self: *const XdgManager) usize {
         return self.workspaces.current;
     }
@@ -118,12 +85,8 @@ pub const XdgManager = struct {
     }
 
     pub fn activateWorkspace(self: *XdgManager, workspace_index: usize) void {
-        const previous = self.workspaces.current;
         const active = self.workspaces.activate(workspace_index);
         self.syncWorkspaceVisibility();
-        if (active != previous) {
-            self.notifyWorkspaceChanged();
-        }
         log.info("workspace {} active", .{active + 1});
     }
 
@@ -140,7 +103,6 @@ pub const XdgManager = struct {
     }
 
     pub fn cycleWorkspace(self: *XdgManager) void {
-        const previous = self.workspaces.current;
         const active = if (self.workspace_wrap)
             self.workspaces.next()
         else blk: {
@@ -150,9 +112,6 @@ pub const XdgManager = struct {
             break :blk self.workspaces.current;
         };
         self.syncWorkspaceVisibility();
-        if (active != previous) {
-            self.notifyWorkspaceChanged();
-        }
         log.info("workspace {} active", .{active + 1});
     }
 
@@ -213,26 +172,6 @@ pub const XdgManager = struct {
             const view = self.views.items[index];
             if (!view.mappedState()) continue;
             if (!std.mem.eql(u8, view.appId(), app_id)) continue;
-            self.focusView(view);
-            return true;
-        }
-
-        return false;
-    }
-
-    pub fn focusedView(self: *const XdgManager) ?*View {
-        return self.focused_view;
-    }
-
-    pub fn focusSurface(self: *XdgManager, surface: [*c]c.struct_wlr_surface) bool {
-        const root_surface = rootXdgSurfaceForSurface(surface) orelse return false;
-
-        var index = self.views.items.len;
-        while (index > 0) {
-            index -= 1;
-            const view = self.views.items[index];
-            if (view.xdg_surface != root_surface) continue;
-            if (!view.mappedState()) return false;
             self.focusView(view);
             return true;
         }
@@ -397,8 +336,6 @@ pub const XdgManager = struct {
             self,
             handleViewRequestMove,
             handleViewRequestResize,
-            self,
-            handleViewStateChanged,
             self.workspaces.current,
             initial_position.x,
             initial_position.y,
@@ -414,9 +351,6 @@ pub const XdgManager = struct {
 
         try self.views.append(self.allocator, view);
         view.setWorkspaceVisible(view.workspaceIndex() == self.workspaces.current);
-        if (self.view_registered_cb) |callback| {
-            callback(self.view_events_ctx, view, self.focused_view == view);
-        }
         log.info("new toplevel registered", .{});
 
         self.next_x += 32;
@@ -449,9 +383,7 @@ pub const XdgManager = struct {
 
     fn isLauncherToplevel(self: *const XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) bool {
         _ = self;
-        if (toplevel.*.app_id != null and (std.mem.eql(u8, std.mem.span(toplevel.*.app_id), "axia-launcher") or
-            std.mem.eql(u8, std.mem.span(toplevel.*.app_id), "org.axia.launcher")))
-        {
+        if (toplevel.*.app_id != null and std.mem.eql(u8, std.mem.span(toplevel.*.app_id), "axia-launcher")) {
             return true;
         }
         if (toplevel.*.title != null and std.mem.eql(u8, std.mem.span(toplevel.*.title), "Axia Launcher")) {
@@ -521,9 +453,6 @@ pub const XdgManager = struct {
     }
 
     fn unregisterView(self: *XdgManager, target: *View) void {
-        if (self.view_unregistered_cb) |callback| {
-            callback(self.view_events_ctx, target);
-        }
         if (self.focused_view == target) {
             self.focused_view = null;
         }
@@ -692,20 +621,17 @@ pub const XdgManager = struct {
         if (self.focused_view) |focused_view| {
             if (focused_view != view) {
                 focused_view.unfocus();
-                self.notifyViewUpdated(focused_view);
             }
         }
 
         self.focused_view = view;
         view.focus();
-        self.notifyViewUpdated(view);
     }
 
     fn clearFocus(self: *XdgManager) void {
         if (self.focused_view) |focused_view| {
             focused_view.unfocus();
             self.focused_view = null;
-            self.notifyViewUpdated(focused_view);
         }
     }
 
@@ -727,17 +653,6 @@ pub const XdgManager = struct {
             if (std.mem.eql(u8, view.appId(), app_id)) return view;
         }
         return null;
-    }
-
-    fn rootXdgSurfaceForSurface(surface: [*c]c.struct_wlr_surface) ?[*c]c.struct_wlr_xdg_surface {
-        var current = c.wlr_xdg_surface_try_from_wlr_surface(surface) orelse return null;
-        while (current.*.role == c.WLR_XDG_SURFACE_ROLE_POPUP) {
-            const parent_surface = current.*.unnamed_0.popup.*.parent;
-            if (parent_surface == null) return current;
-            current = c.wlr_xdg_surface_try_from_wlr_surface(parent_surface) orelse return current;
-        }
-        if (current.*.role != c.WLR_XDG_SURFACE_ROLE_TOPLEVEL) return null;
-        return current;
     }
 
     fn syncWorkspaceVisibility(self: *XdgManager) void {
@@ -787,8 +702,8 @@ pub const XdgManager = struct {
         if (area.width <= 0 or area.height <= 0) return null;
         const full_area = self.fullSnapArea();
 
-        const top_hard_zone = @as(f64, @floatFromInt(area.y)) + 8.0;
-        const top_soft_zone = @as(f64, @floatFromInt(area.y)) + 60.0;
+        const top_hard_zone = @as(f64, @floatFromInt(area.y)) + 4.0;
+        const top_soft_zone = @as(f64, @floatFromInt(area.y)) + 24.0;
         const side_zone = 18.0;
         const left_edge = @as(f64, @floatFromInt(area.x));
         const right_edge = @as(f64, @floatFromInt(area.x + area.width));
@@ -1064,12 +979,6 @@ pub const XdgManager = struct {
         manager.beginInteractiveResize(view, serial, edges);
     }
 
-    fn handleViewStateChanged(ctx: ?*anyopaque, view: *View) void {
-        const raw_manager = ctx orelse return;
-        const manager: *XdgManager = @ptrCast(@alignCast(raw_manager));
-        manager.notifyViewUpdated(view);
-    }
-
     fn beginInteractiveMove(self: *XdgManager, view: *View, serial: u32) void {
         if (!view.canStartInteractive()) return;
         if (!c.wlr_seat_validate_pointer_grab_serial(self.seat, view.xdg_surface.*.surface, serial)) {
@@ -1115,18 +1024,6 @@ pub const XdgManager = struct {
                 return true;
             },
             else => return false,
-        }
-    }
-
-    fn notifyViewUpdated(self: *XdgManager, view: *View) void {
-        if (self.view_updated_cb) |callback| {
-            callback(self.view_events_ctx, view, self.focused_view == view);
-        }
-    }
-
-    fn notifyWorkspaceChanged(self: *XdgManager) void {
-        if (self.workspace_changed_cb) |callback| {
-            callback(self.workspace_events_ctx, self.workspaces.current, self.workspaces.count);
         }
     }
 

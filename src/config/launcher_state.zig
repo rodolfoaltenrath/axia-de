@@ -7,12 +7,15 @@ const max_recent_entries: usize = 8;
 pub const State = struct {
     allocator: std.mem.Allocator,
     favorite_ids: std.ArrayListUnmanaged([]u8) = .empty,
+    launcher_pin_ids: std.ArrayListUnmanaged([]u8) = .empty,
     recent_ids: std.ArrayListUnmanaged([]u8) = .empty,
 
     pub fn deinit(self: *State) void {
         for (self.favorite_ids.items) |id| self.allocator.free(id);
+        for (self.launcher_pin_ids.items) |id| self.allocator.free(id);
         for (self.recent_ids.items) |id| self.allocator.free(id);
         self.favorite_ids.deinit(self.allocator);
+        self.launcher_pin_ids.deinit(self.allocator);
         self.recent_ids.deinit(self.allocator);
     }
 
@@ -30,6 +33,9 @@ pub const State = struct {
         try contents.appendSlice("# Axia-DE launcher state\n");
         for (self.favorite_ids.items) |id| {
             try contents.writer().print("favorite={s}\n", .{id});
+        }
+        for (self.launcher_pin_ids.items) |id| {
+            try contents.writer().print("launcher_pin={s}\n", .{id});
         }
         for (self.recent_ids.items) |id| {
             try contents.writer().print("recent={s}\n", .{id});
@@ -52,8 +58,22 @@ pub const State = struct {
         try self.save();
     }
 
+    pub fn ensureDefaultLauncherPins(self: *State, catalog: *const runtime_catalog.Catalog) !void {
+        if (self.launcher_pin_ids.items.len > 0) return;
+
+        for (catalog.entries.items) |entry| {
+            if (!entry.favorite or entry.id.len == 0) continue;
+            try self.launcher_pin_ids.append(self.allocator, try self.allocator.dupe(u8, entry.id));
+        }
+        try self.save();
+    }
+
     pub fn isFavorite(self: *const State, id: []const u8) bool {
         return containsId(self.favorite_ids.items, id);
+    }
+
+    pub fn isLauncherPinned(self: *const State, id: []const u8) bool {
+        return containsId(self.launcher_pin_ids.items, id);
     }
 
     pub fn toggleFavorite(self: *State, id: []const u8) !bool {
@@ -64,6 +84,17 @@ pub const State = struct {
         }
 
         try self.favorite_ids.append(self.allocator, try self.allocator.dupe(u8, id));
+        return true;
+    }
+
+    pub fn toggleLauncherPin(self: *State, id: []const u8) !bool {
+        if (id.len == 0) return false;
+
+        if (removeId(&self.launcher_pin_ids, self.allocator, id)) {
+            return false;
+        }
+
+        try self.launcher_pin_ids.append(self.allocator, try self.allocator.dupe(u8, id));
         return true;
     }
 
@@ -128,6 +159,23 @@ pub const State = struct {
         return favorites;
     }
 
+    pub fn launcherPinEntries(
+        self: *const State,
+        allocator: std.mem.Allocator,
+        catalog: *const runtime_catalog.Catalog,
+    ) !std.ArrayListUnmanaged(runtime_catalog.AppEntry) {
+        var pinned: std.ArrayListUnmanaged(runtime_catalog.AppEntry) = .empty;
+        errdefer pinned.deinit(allocator);
+
+        for (self.launcher_pin_ids.items) |id| {
+            const entry = catalog.findById(id) orelse continue;
+            if (!entry.enabled) continue;
+            try pinned.append(allocator, entry);
+        }
+
+        return pinned;
+    }
+
     pub fn recentEntries(
         self: *const State,
         allocator: std.mem.Allocator,
@@ -154,11 +202,24 @@ pub fn ensureDefaultFavorites(allocator: std.mem.Allocator, catalog: *const runt
     try state.ensureDefaultFavorites(catalog);
 }
 
+pub fn ensureDefaultLauncherPins(allocator: std.mem.Allocator, catalog: *const runtime_catalog.Catalog) !void {
+    var state = try load(allocator);
+    defer state.deinit();
+    try state.ensureDefaultLauncherPins(catalog);
+}
+
 pub fn loadFavoriteEntries(allocator: std.mem.Allocator, catalog: *const runtime_catalog.Catalog) !std.ArrayListUnmanaged(runtime_catalog.AppEntry) {
     var state = try load(allocator);
     defer state.deinit();
     try state.ensureDefaultFavorites(catalog);
     return state.favoriteEntries(allocator, catalog);
+}
+
+pub fn loadLauncherPinEntries(allocator: std.mem.Allocator, catalog: *const runtime_catalog.Catalog) !std.ArrayListUnmanaged(runtime_catalog.AppEntry) {
+    var state = try load(allocator);
+    defer state.deinit();
+    try state.ensureDefaultLauncherPins(catalog);
+    return state.launcherPinEntries(allocator, catalog);
 }
 
 pub fn loadRecentEntries(
@@ -215,6 +276,13 @@ pub fn load(allocator: std.mem.Allocator) !State {
             const value = std.mem.trim(u8, line["favorite=".len..], " \r\t");
             if (value.len == 0 or containsId(state.favorite_ids.items, value)) continue;
             try state.favorite_ids.append(allocator, try allocator.dupe(u8, value));
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, line, "launcher_pin=")) {
+            const value = std.mem.trim(u8, line["launcher_pin=".len..], " \r\t");
+            if (value.len == 0 or containsId(state.launcher_pin_ids.items, value)) continue;
+            try state.launcher_pin_ids.append(allocator, try allocator.dupe(u8, value));
             continue;
         }
 

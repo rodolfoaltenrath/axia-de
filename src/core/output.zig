@@ -8,11 +8,6 @@ const nested_width = 1366;
 const nested_height = 680;
 
 pub const DestroyCallback = *const fn (?*anyopaque, *Output) void;
-pub const FramePolicyCallback = *const fn (?*anyopaque, [*c]c.struct_wlr_output, [*c]c.struct_wlr_scene_output) FramePolicy;
-
-pub const FramePolicy = struct {
-    allow_tearing: bool = false,
-};
 
 pub const Output = struct {
     allocator: std.mem.Allocator,
@@ -29,8 +24,6 @@ pub const Output = struct {
     background: ?BackgroundNodes = null,
     destroy_ctx: ?*anyopaque,
     destroy_cb: DestroyCallback,
-    frame_policy_ctx: ?*anyopaque,
-    frame_policy_cb: ?FramePolicyCallback,
     destroy: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
     frame: c.struct_wl_listener = std.mem.zeroes(c.struct_wl_listener),
 
@@ -47,8 +40,6 @@ pub const Output = struct {
         wlr_output: [*c]c.struct_wlr_output,
         destroy_ctx: ?*anyopaque,
         destroy_cb: DestroyCallback,
-        frame_policy_ctx: ?*anyopaque,
-        frame_policy_cb: ?FramePolicyCallback,
     ) !*Output {
         const output = try allocator.create(Output);
         output.* = .{
@@ -64,8 +55,6 @@ pub const Output = struct {
             .wlr_output = wlr_output,
             .destroy_ctx = destroy_ctx,
             .destroy_cb = destroy_cb,
-            .frame_policy_ctx = frame_policy_ctx,
-            .frame_policy_cb = frame_policy_cb,
         };
         return output;
     }
@@ -169,25 +158,8 @@ pub const Output = struct {
         try self.ensureBackground();
 
         const scene_output = self.scene_output orelse return error.SceneOutputMissing;
-        var state = std.mem.zeroes(c.struct_wlr_output_state);
-        c.wlr_output_state_init(&state);
-        defer c.wlr_output_state_finish(&state);
-
-        if (!c.wlr_scene_output_build_state(scene_output, &state, null)) {
-            return error.SceneOutputBuildStateFailed;
-        }
-
-        const policy = if (self.frame_policy_cb) |callback|
-            callback(self.frame_policy_ctx, self.wlr_output, scene_output)
-        else
-            FramePolicy{};
-
-        if (policy.allow_tearing) {
-            state.tearing_page_flip = true;
-        }
-
-        if (!c.wlr_output_commit_state(self.wlr_output, &state)) {
-            return error.OutputCommitFailed;
+        if (!c.wlr_scene_output_commit(scene_output, null)) {
+            return error.SceneOutputCommitFailed;
         }
 
         var now: c.struct_timespec = undefined;

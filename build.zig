@@ -10,14 +10,6 @@ pub fn build(b: *std.Build) void {
     const wlroots_include = b.option([]const u8, "wlroots-include", "wlroots include directory") orelse "/usr/include/wlroots-0.18";
     const xdg_shell_xml = b.option([]const u8, "xdg-shell-xml", "path to xdg-shell.xml") orelse "/usr/share/wayland-protocols/stable/xdg-shell/xdg-shell.xml";
     const layer_shell_xml = b.option([]const u8, "layer-shell-xml", "path to wlr-layer-shell XML") orelse "protocols/wlr-layer-shell-unstable-v1.xml";
-    const ext_workspace_xml = b.option([]const u8, "ext-workspace-xml", "path to ext-workspace-v1.xml") orelse "/usr/share/wayland-protocols/staging/ext-workspace/ext-workspace-v1.xml";
-    const cursor_shape_xml = b.option([]const u8, "cursor-shape-xml", "path to cursor-shape-v1.xml") orelse "/usr/share/wayland-protocols/staging/cursor-shape/cursor-shape-v1.xml";
-    const pointer_constraints_xml = b.option([]const u8, "pointer-constraints-xml", "path to pointer-constraints-unstable-v1.xml") orelse "/usr/share/wayland-protocols/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml";
-    const relative_pointer_xml = b.option([]const u8, "relative-pointer-xml", "path to relative-pointer-unstable-v1.xml") orelse "/usr/share/wayland-protocols/unstable/relative-pointer/relative-pointer-unstable-v1.xml";
-    const shortcuts_inhibit_xml = b.option([]const u8, "shortcuts-inhibit-xml", "path to keyboard-shortcuts-inhibit-unstable-v1.xml") orelse "/usr/share/wayland-protocols/unstable/keyboard-shortcuts-inhibit/keyboard-shortcuts-inhibit-unstable-v1.xml";
-    const output_power_xml = b.option([]const u8, "output-power-xml", "path to wlr-output-power-management-unstable-v1.xml") orelse "protocols/wlr-output-power-management-unstable-v1.xml";
-    const content_type_xml = b.option([]const u8, "content-type-xml", "path to content-type-v1.xml") orelse "/usr/share/wayland-protocols/staging/content-type/content-type-v1.xml";
-    const tearing_control_xml = b.option([]const u8, "tearing-control-xml", "path to tearing-control-v1.xml") orelse "/usr/share/wayland-protocols/staging/tearing-control/tearing-control-v1.xml";
 
     const gen_xdg_shell = b.addSystemCommand(&.{
         "wayland-scanner",
@@ -47,69 +39,19 @@ pub fn build(b: *std.Build) void {
     });
     const layer_shell_header = gen_layer_shell.addOutputFileArg("wlr-layer-shell-unstable-v1-protocol.h");
 
-
-    const gen_ext_workspace = b.addSystemCommand(&.{
+    const gen_layer_shell_client_header = b.addSystemCommand(&.{
         "wayland-scanner",
-        "server-header",
-        ext_workspace_xml,
+        "client-header",
+        layer_shell_xml,
     });
-    const ext_workspace_header = gen_ext_workspace.addOutputFileArg("ext-workspace-v1-protocol.h");
+    const layer_shell_client_header = gen_layer_shell_client_header.addOutputFileArg("wlr-layer-shell-unstable-v1-client-protocol.h");
 
-    const gen_ext_workspace_code = b.addSystemCommand(&.{
+    const gen_layer_shell_client_code = b.addSystemCommand(&.{
         "wayland-scanner",
         "private-code",
-        ext_workspace_xml,
+        layer_shell_xml,
     });
-    const ext_workspace_code = gen_ext_workspace_code.addOutputFileArg("ext-workspace-v1-protocol.c");
-
-    const gen_cursor_shape = b.addSystemCommand(&.{
-        "wayland-scanner",
-        "server-header",
-        cursor_shape_xml,
-    });
-    const cursor_shape_header = gen_cursor_shape.addOutputFileArg("cursor-shape-v1-protocol.h");
-
-    const gen_pointer_constraints = b.addSystemCommand(&.{
-        "wayland-scanner",
-        "server-header",
-        pointer_constraints_xml,
-    });
-    const pointer_constraints_header = gen_pointer_constraints.addOutputFileArg("pointer-constraints-unstable-v1-protocol.h");
-
-    const gen_relative_pointer = b.addSystemCommand(&.{
-        "wayland-scanner",
-        "server-header",
-        relative_pointer_xml,
-    });
-    const relative_pointer_header = gen_relative_pointer.addOutputFileArg("relative-pointer-unstable-v1-protocol.h");
-
-    const gen_shortcuts_inhibit = b.addSystemCommand(&.{
-        "wayland-scanner",
-        "server-header",
-        shortcuts_inhibit_xml,
-    });
-    const shortcuts_inhibit_header = gen_shortcuts_inhibit.addOutputFileArg("keyboard-shortcuts-inhibit-unstable-v1-protocol.h");
-
-    const gen_output_power = b.addSystemCommand(&.{
-        "wayland-scanner",
-        "server-header",
-        output_power_xml,
-    });
-    const output_power_header = gen_output_power.addOutputFileArg("wlr-output-power-management-unstable-v1-protocol.h");
-
-    const gen_content_type = b.addSystemCommand(&.{
-        "wayland-scanner",
-        "server-header",
-        content_type_xml,
-    });
-    const content_type_header = gen_content_type.addOutputFileArg("content-type-v1-protocol.h");
-
-    const gen_tearing_control = b.addSystemCommand(&.{
-        "wayland-scanner",
-        "server-header",
-        tearing_control_xml,
-    });
-    const tearing_control_header = gen_tearing_control.addOutputFileArg("tearing-control-v1-protocol.h");
+    const layer_shell_client_code = gen_layer_shell_client_code.addOutputFileArg("wlr-layer-shell-unstable-v1-protocol.c");
 
     const apps_catalog_module = b.createModule(.{
         .root_source_file = b.path("src/apps/catalog.zig"),
@@ -211,15 +153,6 @@ pub fn build(b: *std.Build) void {
     exe.linkLibC();
     exe.step.dependOn(&gen_xdg_shell.step);
     exe.step.dependOn(&gen_layer_shell.step);
-    exe.step.dependOn(&gen_ext_workspace.step);
-    exe.step.dependOn(&gen_ext_workspace_code.step);
-    exe.step.dependOn(&gen_cursor_shape.step);
-    exe.step.dependOn(&gen_pointer_constraints.step);
-    exe.step.dependOn(&gen_relative_pointer.step);
-    exe.step.dependOn(&gen_shortcuts_inhibit.step);
-    exe.step.dependOn(&gen_output_power.step);
-    exe.step.dependOn(&gen_content_type.step);
-    exe.step.dependOn(&gen_tearing_control.step);
 
     exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
     exe.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
@@ -228,15 +161,6 @@ pub fn build(b: *std.Build) void {
     exe.addIncludePath(.{ .cwd_relative = wlroots_include });
     exe.addIncludePath(xdg_shell_header.dirname());
     exe.addIncludePath(layer_shell_header.dirname());
-    exe.addIncludePath(ext_workspace_header.dirname());
-    exe.addIncludePath(cursor_shape_header.dirname());
-    exe.addIncludePath(pointer_constraints_header.dirname());
-    exe.addIncludePath(relative_pointer_header.dirname());
-    exe.addIncludePath(shortcuts_inhibit_header.dirname());
-    exe.addIncludePath(output_power_header.dirname());
-    exe.addIncludePath(content_type_header.dirname());
-    exe.addIncludePath(tearing_control_header.dirname());
-    exe.addCSourceFile(.{ .file = ext_workspace_code });
 
     exe.linkSystemLibrary(wlroots_lib);
     exe.linkSystemLibrary("wayland-server");
@@ -246,7 +170,128 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    const panel_exe = b.addExecutable(.{
+        .name = "axia-panel",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/panel/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
 
+    panel_exe.linkLibC();
+    panel_exe.root_module.addImport("apps_catalog", apps_catalog_module);
+    panel_exe.root_module.addImport("runtime_catalog", runtime_catalog_module);
+    panel_exe.root_module.addImport("launcher_state", launcher_state_module);
+    panel_exe.root_module.addImport("axia_prefs", prefs_module);
+    panel_exe.root_module.addImport("settings_model", settings_model_module);
+    panel_exe.root_module.addImport("toast_model", toast_model_module);
+    panel_exe.root_module.addImport("toast_client", toast_client_module);
+    panel_exe.root_module.addImport("notification_model", notification_model_module);
+    panel_exe.root_module.addImport("notification_client", notification_client_module);
+    panel_exe.step.dependOn(&gen_xdg_shell_client_header.step);
+    panel_exe.step.dependOn(&gen_xdg_shell_client_code.step);
+    panel_exe.step.dependOn(&gen_layer_shell_client_header.step);
+    panel_exe.step.dependOn(&gen_layer_shell_client_code.step);
+    panel_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    panel_exe.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
+    panel_exe.addIncludePath(.{ .cwd_relative = "/usr/include/pixman-1" });
+    panel_exe.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    panel_exe.addIncludePath(xdg_shell_client_header.dirname());
+    panel_exe.addIncludePath(layer_shell_client_header.dirname());
+    panel_exe.addCSourceFile(.{ .file = xdg_shell_client_code });
+    panel_exe.addCSourceFile(.{ .file = layer_shell_client_code });
+    panel_exe.linkSystemLibrary("wayland-client");
+    panel_exe.linkSystemLibrary("cairo");
+
+    b.installArtifact(panel_exe);
+
+    const dock_exe = b.addExecutable(.{
+        .name = "axia-dock",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/dock/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    dock_exe.linkLibC();
+    dock_exe.root_module.addImport("apps_catalog", apps_catalog_module);
+    dock_exe.root_module.addImport("runtime_catalog", runtime_catalog_module);
+    dock_exe.root_module.addImport("launcher_state", launcher_state_module);
+    dock_exe.root_module.addImport("axia_prefs", prefs_module);
+    dock_exe.step.dependOn(&gen_xdg_shell_client_header.step);
+    dock_exe.step.dependOn(&gen_xdg_shell_client_code.step);
+    dock_exe.step.dependOn(&gen_layer_shell_client_header.step);
+    dock_exe.step.dependOn(&gen_layer_shell_client_code.step);
+    dock_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    dock_exe.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
+    dock_exe.addIncludePath(.{ .cwd_relative = "/usr/include/pixman-1" });
+    dock_exe.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    dock_exe.addIncludePath(xdg_shell_client_header.dirname());
+    dock_exe.addIncludePath(layer_shell_client_header.dirname());
+    dock_exe.addCSourceFile(.{ .file = xdg_shell_client_code });
+    dock_exe.addCSourceFile(.{ .file = layer_shell_client_code });
+    dock_exe.linkSystemLibrary("wayland-client");
+    dock_exe.linkSystemLibrary("cairo");
+
+    b.installArtifact(dock_exe);
+
+    const launcher_app_exe = b.addExecutable(.{
+        .name = "axia-launcher",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/apps/launcher/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    launcher_app_exe.linkLibC();
+    launcher_app_exe.root_module.addImport("apps_catalog", apps_catalog_module);
+    launcher_app_exe.root_module.addImport("runtime_catalog", runtime_catalog_module);
+    launcher_app_exe.root_module.addImport("launcher_state", launcher_state_module);
+    launcher_app_exe.root_module.addImport("client_wl", client_wl_module);
+    launcher_app_exe.root_module.addImport("client_buffer", client_buffer_module);
+    launcher_app_exe.root_module.addImport("client_chrome", client_chrome_module);
+    launcher_app_exe.step.dependOn(&gen_xdg_shell_client_header.step);
+    launcher_app_exe.step.dependOn(&gen_xdg_shell_client_code.step);
+    launcher_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    launcher_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
+    launcher_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/pixman-1" });
+    launcher_app_exe.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    launcher_app_exe.addIncludePath(xdg_shell_client_header.dirname());
+    launcher_app_exe.addCSourceFile(.{ .file = xdg_shell_client_code });
+    launcher_app_exe.linkSystemLibrary("wayland-client");
+    launcher_app_exe.linkSystemLibrary("cairo");
+    launcher_app_exe.linkSystemLibrary("xkbcommon");
+    b.installArtifact(launcher_app_exe);
+
+    const app_grid_exe = b.addExecutable(.{
+        .name = "axia-app-grid",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/apps/app_grid/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    app_grid_exe.linkLibC();
+    app_grid_exe.root_module.addImport("apps_catalog", apps_catalog_module);
+    app_grid_exe.root_module.addImport("runtime_catalog", runtime_catalog_module);
+    app_grid_exe.root_module.addImport("launcher_state", launcher_state_module);
+    app_grid_exe.root_module.addImport("client_wl", client_wl_module);
+    app_grid_exe.root_module.addImport("client_buffer", client_buffer_module);
+    app_grid_exe.root_module.addImport("client_chrome", client_chrome_module);
+    app_grid_exe.step.dependOn(&gen_xdg_shell_client_header.step);
+    app_grid_exe.step.dependOn(&gen_xdg_shell_client_code.step);
+    app_grid_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });
+    app_grid_exe.addIncludePath(.{ .cwd_relative = "/usr/include/cairo" });
+    app_grid_exe.addIncludePath(.{ .cwd_relative = "/usr/include/pixman-1" });
+    app_grid_exe.addIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    app_grid_exe.addIncludePath(xdg_shell_client_header.dirname());
+    app_grid_exe.addCSourceFile(.{ .file = xdg_shell_client_code });
+    app_grid_exe.linkSystemLibrary("wayland-client");
+    app_grid_exe.linkSystemLibrary("cairo");
+    app_grid_exe.linkSystemLibrary("xkbcommon");
+    b.installArtifact(app_grid_exe);
 
     const files_app_exe = b.addExecutable(.{
         .name = "axia-files",
@@ -356,7 +401,6 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run Axia-DE");
     run_step.dependOn(&run_cmd.step);
 
-<<<<<<< HEAD
     const run_panel_cmd = b.addRunArtifact(panel_exe);
     run_panel_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
@@ -410,6 +454,4 @@ pub fn build(b: *std.Build) void {
 
     const run_settings_step = b.step("run-settings", "Run Axia settings app");
     run_settings_step.dependOn(&run_settings_cmd.step);
-=======
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
 }

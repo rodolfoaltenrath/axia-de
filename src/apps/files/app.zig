@@ -16,6 +16,7 @@ const double_click_threshold_ms: i64 = 380;
 const DialogKind = enum {
     none,
     new_folder,
+    new_file,
     rename,
     delete_confirm,
     delete_permanent_confirm,
@@ -59,7 +60,7 @@ pub const App = struct {
     wl_surface: ?*c.struct_wl_surface = null,
     xdg_surface: ?*c.struct_xdg_surface = null,
     toplevel: ?*c.struct_xdg_toplevel = null,
-    buffer: ?buffer_mod.ShmBuffer = null,
+    buffers: [3]?buffer_mod.ShmBuffer = .{ null, null, null },
     ipc_socket_path: ?[]u8 = null,
     running: bool = true,
     configured: bool = false,
@@ -75,6 +76,10 @@ pub const App = struct {
     last_click_ms: i64 = 0,
     maximized: bool = false,
     sidebar_collapsed: bool = false,
+    zoom_level: u8 = 1,
+    show_details: bool = false,
+    context_menu: ?render.ContextMenu = null,
+    context_targets_selection: bool = false,
     mode: Mode = .browser,
     browser: browser.Browser,
     icons: icons.SidebarIcons,
@@ -130,7 +135,10 @@ pub const App = struct {
     }
 
     fn deinit(self: *App) void {
-        if (self.buffer) |*buffer| buffer.deinit();
+        for (&self.buffers) |*slot| {
+            if (slot.*) |*buffer| buffer.deinit();
+            slot.* = null;
+        }
         self.clearXkb();
         if (self.keyboard) |keyboard| c.wl_keyboard_destroy(keyboard);
         if (self.pointer) |pointer| c.wl_pointer_destroy(pointer);
@@ -195,17 +203,19 @@ pub const App = struct {
         if (!self.configured or !self.dirty) return;
         const shm = self.shm orelse return error.ShmMissing;
 
-        if (self.buffer) |*buffer| buffer.deinit();
-        self.buffer = try buffer_mod.ShmBuffer.init(shm, self.current_width, self.current_height, "axia-files");
-
-        const buffer = &self.buffer.?;
+        const buffer = try self.acquireBuffer(shm) orelse {
+            self.dirty = true;
+            return;
+        };
+        const view = self.viewOptions();
+        const snapshot = self.browser.snapshot(render.visibleEntryCapacity(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized, view));
+        self.icons.ensureVisibleThumbnails(snapshot);
         render.draw(
             buffer.cr,
             self.current_width,
             self.current_height,
-            self.browser.snapshot(),
+            snapshot,
             self.hovered,
-            self.maximized,
             self.sidebar_collapsed,
             &self.icons,
             self.mode == .wallpaper_picker,
@@ -213,26 +223,54 @@ pub const App = struct {
             self.dialog.inputText(),
             self.dialog.subjectText(),
             self.maximized,
+            view,
         );
         c.cairo_surface_flush(buffer.surface);
         c.wl_surface_attach(self.wl_surface.?, buffer.buffer, 0, 0);
         c.wl_surface_damage_buffer(self.wl_surface.?, 0, 0, @intCast(self.current_width), @intCast(self.current_height));
         c.wl_surface_commit(self.wl_surface.?);
+        buffer.markBusy();
         self.dirty = false;
     }
 
+    fn acquireBuffer(self: *App, shm: *c.struct_wl_shm) !?*buffer_mod.ShmBuffer {
+        for (&self.buffers) |*slot| {
+            if (slot.*) |*buffer| {
+                if (buffer.width != self.current_width or buffer.height != self.current_height) {
+                    if (buffer.busy) continue;
+                    buffer.deinit();
+                    slot.* = null;
+                }
+            }
+        }
+
+        for (&self.buffers) |*slot| {
+            if (slot.*) |*buffer| {
+                if (!buffer.busy) return buffer;
+                continue;
+            }
+
+            slot.* = try buffer_mod.ShmBuffer.init(shm, self.current_width, self.current_height, "axia-files");
+            slot.*.?.installListener();
+            return &slot.*.?;
+        }
+
+        return null;
+    }
+
     fn updateHover(self: *App) void {
+        const view = self.viewOptions();
         const new_hovered = render.hitTest(
             self.current_width,
             self.current_height,
             self.pointer_x,
             self.pointer_y,
-            self.browser.snapshot(),
-            self.maximized,
+            self.browser.snapshot(render.visibleEntryCapacity(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized, view)),
             self.sidebar_collapsed,
             self.mode == .wallpaper_picker,
             dialogKindForRender(self.dialog.kind),
             self.maximized,
+            view,
         );
         if (!hitEquals(new_hovered, self.hovered)) {
             self.hovered = new_hovered;
@@ -241,14 +279,17 @@ pub const App = struct {
     }
 
     fn scrollAtPointer(self: *App, direction: isize) void {
-<<<<<<< HEAD
         if (!render.scrollRegionRect(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized).contains(self.pointer_x, self.pointer_y)) {
-=======
-        if (!render.scrollRegionRect(self.current_width, self.current_height, self.maximized, self.sidebar_collapsed).contains(self.pointer_x, self.pointer_y)) {
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             return;
         }
-        self.browser.scrollLines(direction);
+        if (isCtrlPressed(self)) {
+            self.zoomBy(direction);
+            return;
+        }
+        const view = self.viewOptionsWithoutContext();
+        const columns = render.visibleColumns(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized, view);
+        const visible_limit = render.visibleEntryCapacity(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized, view);
+        self.browser.scrollItems(direction * @as(isize, @intCast(columns)), visible_limit);
         self.updateHover();
         self.dirty = true;
     }
@@ -283,10 +324,63 @@ pub const App = struct {
             .delete_selected => self.beginDeleteDialog(),
             .dialog_confirm => self.confirmDialog(),
             .dialog_cancel => self.dialog.clear(),
-            .previous => self.browser.previousPage(),
-            .next => self.browser.nextPage(),
+            .previous => self.browser.previousPage(self.visibleLimit()),
+            .next => self.browser.nextPage(self.visibleLimit()),
             .sort_modified => self.browser.toggleModifiedSort(),
+            .context_details => {
+                self.show_details = !self.show_details;
+                self.context_menu = null;
+            },
+            .context_pin => {
+                if (self.context_targets_selection) {
+                    self.browser.pinSelectedDirectory() catch {};
+                } else {
+                    self.browser.pinCurrentDirectory() catch {};
+                }
+                self.context_menu = null;
+            },
+            .context_unpin => {
+                if (self.context_targets_selection) {
+                    self.browser.unpinSelectedDirectory() catch {};
+                } else {
+                    self.browser.unpinCurrentDirectory() catch {};
+                }
+                self.context_menu = null;
+            },
+            .context_new_folder => {
+                self.context_menu = null;
+                self.beginCreateFolderDialog();
+            },
+            .context_new_file => {
+                self.context_menu = null;
+                self.beginCreateFileDialog();
+            },
+            .context_open_terminal => {
+                self.context_menu = null;
+                self.openTerminalHere();
+            },
+            .context_select_all => {
+                self.browser.selectAll() catch {};
+                self.context_menu = null;
+            },
+            .context_paste => {
+                self.context_menu = null;
+                self.pasteFromClipboard();
+            },
+            .context_sort_name => {
+                self.browser.sortByName();
+                self.context_menu = null;
+            },
+            .context_sort_modified => {
+                self.browser.sortByModified();
+                self.context_menu = null;
+            },
+            .context_sort_size => {
+                self.browser.sortBySize();
+                self.context_menu = null;
+            },
             .sidebar => |target| self.browser.openSidebar(target) catch {},
+            .pinned_folder => |index| self.browser.openPinnedFolder(index) catch {},
             .entry => |index| {
                 if (self.mode == .wallpaper_picker) {
                     self.handleWallpaperPickerEntry(index);
@@ -299,6 +393,7 @@ pub const App = struct {
     }
 
     fn handleBrowserEntry(self: *App, index: usize) void {
+        self.context_menu = null;
         const entry = self.browser.visibleEntry(index) orelse return;
         const clicked_twice = self.registerEntryClick(entry.path);
         if (clicked_twice) {
@@ -309,10 +404,15 @@ pub const App = struct {
             return;
         }
 
-        self.browser.selectVisible(index) catch {};
+        if (isCtrlPressed(self)) {
+            self.browser.toggleVisibleSelection(index) catch {};
+        } else {
+            self.browser.selectVisible(index) catch {};
+        }
     }
 
     fn handleWallpaperPickerEntry(self: *App, index: usize) void {
+        self.context_menu = null;
         const entry = self.browser.visibleEntry(index) orelse return;
         switch (entry.kind) {
             .directory => self.browser.openDirectory(entry.path) catch {},
@@ -324,6 +424,7 @@ pub const App = struct {
     }
 
     fn openSelectedPath(self: *App) void {
+        if (self.browser.selectedCount() != 1) return;
         const path = self.browser.selectedPath() orelse return;
         if (self.browser.hasSelectedDirectory()) {
             self.browser.activateSelected() catch {};
@@ -368,6 +469,169 @@ pub const App = struct {
         log.err("no default opener found for files app", .{});
     }
 
+    fn openTerminalHere(self: *App) void {
+        const current_dir = self.browser.currentDirectory() orelse return;
+        const fallbacks = [_][]const u8{
+            "x-terminal-emulator",
+            "foot",
+            "alacritty",
+            "kitty",
+            "gnome-terminal",
+            "konsole",
+            "xterm",
+        };
+
+        for (fallbacks) |terminal| {
+            var child = std.process.Child.init(&.{terminal}, self.allocator);
+            child.cwd = current_dir;
+            child.stdin_behavior = .Ignore;
+            child.stdout_behavior = .Ignore;
+            child.stderr_behavior = .Ignore;
+            child.spawn() catch |err| switch (err) {
+                error.FileNotFound => continue,
+                else => {
+                    log.err("failed to open terminal: {}", .{err});
+                    self.showToast(.failure, "Nao foi possivel abrir o terminal.");
+                    return;
+                },
+            };
+            return;
+        }
+
+        self.showToast(.failure, "Nenhum terminal encontrado.");
+    }
+
+    fn pasteFromClipboard(self: *App) void {
+        var paths = self.readClipboardFilePaths() catch |err| {
+            log.err("failed to read clipboard file paths: {}", .{err});
+            self.showToast(.failure, "Nao foi possivel ler a area de transferencia.");
+            return;
+        };
+        defer {
+            for (paths.items) |path| self.allocator.free(path);
+            paths.deinit(self.allocator);
+        }
+
+        if (paths.items.len == 0) {
+            self.showToast(.info, "Nenhum arquivo para colar.");
+            return;
+        }
+
+        const pasted = self.browser.pastePaths(paths.items) catch |err| {
+            log.err("failed to paste files: {}", .{err});
+            self.showToast(.failure, "Nao foi possivel colar.");
+            return;
+        };
+        if (pasted == 0) {
+            self.showToast(.info, "Nenhum arquivo para colar.");
+        } else {
+            self.showToast(.success, "Item colado.");
+        }
+    }
+
+    fn readClipboardFilePaths(self: *App) !std.ArrayListUnmanaged([]u8) {
+        const result = try std.process.Child.run(.{
+            .allocator = self.allocator,
+            .argv = &.{ "wl-paste", "--no-newline", "--type", "text/uri-list" },
+            .max_output_bytes = 1024 * 1024,
+        });
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        switch (result.term) {
+            .Exited => |code| if (code != 0) return error.ClipboardReadFailed,
+            else => return error.ClipboardReadFailed,
+        }
+
+        var paths: std.ArrayListUnmanaged([]u8) = .empty;
+        errdefer {
+            for (paths.items) |path| self.allocator.free(path);
+            paths.deinit(self.allocator);
+        }
+
+        var lines = std.mem.tokenizeAny(u8, result.stdout, "\r\n");
+        while (lines.next()) |line_raw| {
+            const line = std.mem.trim(u8, line_raw, " \t");
+            if (line.len == 0 or line[0] == '#') continue;
+            const path = try clipboardLineToPath(self.allocator, line);
+            errdefer self.allocator.free(path);
+            if (!std.fs.path.isAbsolute(path)) {
+                self.allocator.free(path);
+                continue;
+            }
+            try paths.append(self.allocator, path);
+        }
+        return paths;
+    }
+
+    fn openContextMenu(self: *App) void {
+        if (self.mode == .wallpaper_picker or self.dialog.kind != .none) return;
+        const hovered = self.hovered;
+        var targets_selection = false;
+        var kind: render.ContextMenuKind = .empty_space;
+        switch (hovered) {
+            .entry => |index| {
+                self.browser.selectVisible(index) catch {};
+                targets_selection = true;
+                kind = .selection;
+            },
+            .none => {
+                if (!render.scrollRegionRect(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized).contains(self.pointer_x, self.pointer_y)) {
+                    return;
+                }
+            },
+            else => return,
+        }
+        self.context_targets_selection = targets_selection;
+        const menu_width: f64 = if (kind == .empty_space) 360.0 else 220.0;
+        const menu_height: f64 = if (kind == .empty_space) 338.0 else 136.0;
+        self.context_menu = .{
+            .x = @max(6.0, @min(self.pointer_x, @as(f64, @floatFromInt(self.current_width)) - menu_width - 12.0)),
+            .y = @max(6.0, @min(self.pointer_y, @as(f64, @floatFromInt(self.current_height)) - menu_height - 12.0)),
+            .kind = kind,
+            .details_enabled = self.show_details,
+            .can_pin = if (targets_selection) self.browser.canPinSelection() else !self.browser.isCurrentDirectoryPinned(),
+            .can_unpin = if (targets_selection) self.browser.canUnpinSelection() else self.browser.canUnpinCurrentDirectory(),
+            .sort_field = self.browser.sort_field,
+        };
+        self.updateHover();
+        self.dirty = true;
+    }
+
+    fn zoomBy(self: *App, direction: isize) void {
+        const previous = self.zoom_level;
+        if (direction < 0 and self.zoom_level < 3) {
+            self.zoom_level += 1;
+        } else if (direction > 0 and self.zoom_level > 0) {
+            self.zoom_level -= 1;
+        }
+        if (self.zoom_level == previous) return;
+        self.context_menu = null;
+        self.browser.scrollItems(0, self.visibleLimit());
+        self.updateHover();
+        self.dirty = true;
+    }
+
+    fn visibleLimit(self: *App) usize {
+        return render.visibleEntryCapacity(self.current_width, self.current_height, self.sidebar_collapsed, self.maximized, self.viewOptionsWithoutContext());
+    }
+
+    fn viewOptions(self: *const App) render.ViewOptions {
+        return .{
+            .zoom_level = self.zoom_level,
+            .show_details = self.show_details,
+            .context_menu = self.context_menu,
+        };
+    }
+
+    fn viewOptionsWithoutContext(self: *const App) render.ViewOptions {
+        return .{
+            .zoom_level = self.zoom_level,
+            .show_details = self.show_details,
+            .context_menu = null,
+        };
+    }
+
     fn setSeat(self: *App, seat: *c.struct_wl_seat) void {
         self.seat = seat;
         self.seat_listener = .{ .capabilities = handleSeatCapabilities, .name = handleSeatName };
@@ -382,8 +646,17 @@ pub const App = struct {
         self.dirty = true;
     }
 
+    fn beginCreateFileDialog(self: *App) void {
+        if (self.mode == .wallpaper_picker) return;
+        self.dialog.clear();
+        self.dialog.kind = .new_file;
+        self.setDialogInput("Novo arquivo");
+        self.dirty = true;
+    }
+
     fn beginRenameDialog(self: *App) void {
         if (self.mode == .wallpaper_picker) return;
+        if (self.browser.selectedCount() != 1) return;
         const name = self.browser.selectedName() orelse return;
         self.dialog.clear();
         self.dialog.kind = .rename;
@@ -394,19 +667,33 @@ pub const App = struct {
 
     fn beginDeleteDialog(self: *App) void {
         if (self.mode == .wallpaper_picker) return;
-        const name = self.browser.selectedName() orelse return;
+        if (self.browser.selectedCount() == 0) return;
         self.dialog.clear();
         self.dialog.kind = if (self.browser.isViewingTrash()) .delete_permanent_confirm else .delete_confirm;
-        self.setDialogSubject(name);
+        if (self.browser.selectedCount() == 1) {
+            const name = self.browser.selectedName() orelse return;
+            self.setDialogSubject(name);
+        } else {
+            var buffer: [64]u8 = undefined;
+            const subject = std.fmt.bufPrint(&buffer, "{d} itens selecionados", .{self.browser.selectedCount()}) catch "Itens selecionados";
+            self.setDialogSubject(subject);
+        }
         self.dirty = true;
     }
 
     fn beginPermanentDeleteDialog(self: *App) void {
         if (self.mode == .wallpaper_picker) return;
-        const name = self.browser.selectedName() orelse return;
+        if (self.browser.selectedCount() == 0) return;
         self.dialog.clear();
         self.dialog.kind = .delete_permanent_confirm;
-        self.setDialogSubject(name);
+        if (self.browser.selectedCount() == 1) {
+            const name = self.browser.selectedName() orelse return;
+            self.setDialogSubject(name);
+        } else {
+            var buffer: [64]u8 = undefined;
+            const subject = std.fmt.bufPrint(&buffer, "{d} itens selecionados", .{self.browser.selectedCount()}) catch "Itens selecionados";
+            self.setDialogSubject(subject);
+        }
         self.dirty = true;
     }
 
@@ -420,6 +707,14 @@ pub const App = struct {
                     return;
                 };
                 self.showToast(.success, "Pasta criada.");
+            },
+            .new_file => {
+                self.browser.createFileNamed(self.dialog.inputText()) catch |err| {
+                    log.err("failed to create file: {}", .{err});
+                    self.showToast(.failure, "Nao foi possivel criar o arquivo.");
+                    return;
+                };
+                self.showToast(.success, "Arquivo criado.");
             },
             .rename => {
                 self.browser.renameSelectedTo(self.dialog.inputText()) catch |err| {
@@ -530,7 +825,7 @@ pub const App = struct {
         const app: *App = @ptrCast(@alignCast(raw_app));
         if (width_arg > 0) app.current_width = @intCast(width_arg);
         if (height_arg > 0) app.current_height = @intCast(height_arg);
-        app.maximized = hasState(states, c.XDG_TOPLEVEL_STATE_MAXIMIZED);
+        app.maximized = hasAttachedState(states);
         app.dirty = true;
     }
     fn handleToplevelClose(data: ?*anyopaque, _: ?*c.struct_xdg_toplevel) callconv(.c) void {
@@ -603,10 +898,33 @@ pub const App = struct {
         app.redraw() catch {};
     }
     fn handlePointerButton(data: ?*anyopaque, _: ?*c.struct_wl_pointer, serial: u32, _: u32, button: u32, state: u32) callconv(.c) void {
-        if (state != c.WL_POINTER_BUTTON_STATE_PRESSED or button != 0x110) return;
+        if (state != c.WL_POINTER_BUTTON_STATE_PRESSED) return;
         const raw_app = data orelse return;
         const app: *App = @ptrCast(@alignCast(raw_app));
         app.last_button_serial = serial;
+        if (button == 0x111) {
+            app.openContextMenu();
+            app.redraw() catch {};
+            return;
+        }
+        if (button != 0x110) return;
+        if (app.context_menu != null) {
+            switch (app.hovered) {
+                .context_details,
+                .context_pin,
+                .context_unpin,
+                .context_new_folder,
+                .context_new_file,
+                .context_open_terminal,
+                .context_select_all,
+                .context_paste,
+                .context_sort_name,
+                .context_sort_modified,
+                .context_sort_size,
+                => {},
+                else => app.context_menu = null,
+            }
+        }
         app.handleAction();
         app.updateHover();
         app.redraw() catch {};
@@ -695,8 +1013,33 @@ pub const App = struct {
             }
         }
 
+        const ctrl_pressed = isCtrlPressed(app);
+        const shift_pressed = isShiftPressed(app);
+        if (ctrl_pressed and shift_pressed and (keysym == c.XKB_KEY_N or keysym == c.XKB_KEY_n)) {
+            app.beginCreateFolderDialog();
+            return;
+        }
+        if (ctrl_pressed and !shift_pressed and (keysym == c.XKB_KEY_A or keysym == c.XKB_KEY_a)) {
+            app.browser.selectAll() catch {};
+            app.context_menu = null;
+            app.dirty = true;
+            return;
+        }
+        if (ctrl_pressed and !shift_pressed and (keysym == c.XKB_KEY_V or keysym == c.XKB_KEY_v)) {
+            app.context_menu = null;
+            app.pasteFromClipboard();
+            app.dirty = true;
+            return;
+        }
+
         switch (keysym) {
-            c.XKB_KEY_Escape => app.running = false,
+            c.XKB_KEY_Escape => {
+                if (app.context_menu != null) {
+                    app.context_menu = null;
+                } else {
+                    app.running = false;
+                }
+            },
             c.XKB_KEY_Return, c.XKB_KEY_KP_Enter => app.openSelectedPath(),
             c.XKB_KEY_F2 => app.beginRenameDialog(),
             c.XKB_KEY_Delete => if (isShiftPressed(app)) app.beginPermanentDeleteDialog() else app.beginDeleteDialog(),
@@ -725,6 +1068,14 @@ fn hasState(states: [*c]c.struct_wl_array, target: u32) bool {
     return false;
 }
 
+fn hasAttachedState(states: [*c]c.struct_wl_array) bool {
+    return hasState(states, c.XDG_TOPLEVEL_STATE_MAXIMIZED) or
+        hasState(states, c.XDG_TOPLEVEL_STATE_TILED_LEFT) or
+        hasState(states, c.XDG_TOPLEVEL_STATE_TILED_RIGHT) or
+        hasState(states, c.XDG_TOPLEVEL_STATE_TILED_TOP) or
+        hasState(states, c.XDG_TOPLEVEL_STATE_TILED_BOTTOM);
+}
+
 fn hitEquals(lhs: render.Hit, rhs: render.Hit) bool {
     return switch (lhs) {
         .none => rhs == .none,
@@ -742,10 +1093,25 @@ fn hitEquals(lhs: render.Hit, rhs: render.Hit) bool {
         .previous => rhs == .previous,
         .next => rhs == .next,
         .sort_modified => rhs == .sort_modified,
+        .context_details => rhs == .context_details,
+        .context_pin => rhs == .context_pin,
+        .context_unpin => rhs == .context_unpin,
+        .context_new_folder => rhs == .context_new_folder,
+        .context_new_file => rhs == .context_new_file,
+        .context_open_terminal => rhs == .context_open_terminal,
+        .context_select_all => rhs == .context_select_all,
+        .context_paste => rhs == .context_paste,
+        .context_sort_name => rhs == .context_sort_name,
+        .context_sort_modified => rhs == .context_sort_modified,
+        .context_sort_size => rhs == .context_sort_size,
         .dialog_confirm => rhs == .dialog_confirm,
         .dialog_cancel => rhs == .dialog_cancel,
         .sidebar => |left_target| switch (rhs) {
             .sidebar => |right_target| left_target == right_target,
+            else => false,
+        },
+        .pinned_folder => |left_index| switch (rhs) {
+            .pinned_folder => |right_index| left_index == right_index,
             else => false,
         },
         .entry => |left_index| switch (rhs) {
@@ -759,10 +1125,46 @@ fn dialogKindForRender(kind: DialogKind) render.DialogKind {
     return switch (kind) {
         .none => .none,
         .new_folder => .new_folder,
+        .new_file => .new_file,
         .rename => .rename,
         .delete_confirm => .delete_confirm,
         .delete_permanent_confirm => .delete_permanent_confirm,
     };
+}
+
+fn clipboardLineToPath(allocator: std.mem.Allocator, line: []const u8) ![]u8 {
+    if (!std.mem.startsWith(u8, line, "file://")) {
+        return try allocator.dupe(u8, line);
+    }
+
+    var rest = line["file://".len..];
+    if (std.mem.startsWith(u8, rest, "localhost/")) {
+        rest = rest["localhost".len..];
+    } else if (rest.len > 0 and rest[0] != '/') {
+        return error.UnsupportedFileUri;
+    }
+    return try percentDecode(allocator, rest);
+}
+
+fn percentDecode(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    var decoded: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer decoded.deinit(allocator);
+
+    var index: usize = 0;
+    while (index < text.len) {
+        if (text[index] == '%' and index + 2 < text.len) {
+            const high = std.fmt.charToDigit(text[index + 1], 16) catch null;
+            const low = std.fmt.charToDigit(text[index + 2], 16) catch null;
+            if (high != null and low != null) {
+                try decoded.append(allocator, @intCast(high.? * 16 + low.?));
+                index += 3;
+                continue;
+            }
+        }
+        try decoded.append(allocator, text[index]);
+        index += 1;
+    }
+    return try decoded.toOwnedSlice(allocator);
 }
 
 fn isShiftPressed(app: *const App) bool {
@@ -771,4 +1173,12 @@ fn isShiftPressed(app: *const App) bool {
     const shift_index = c.xkb_keymap_mod_get_index(keymap, c.XKB_MOD_NAME_SHIFT);
     if (shift_index == c.XKB_MOD_INVALID) return false;
     return c.xkb_state_mod_index_is_active(state, shift_index, c.XKB_STATE_MODS_EFFECTIVE) == 1;
+}
+
+fn isCtrlPressed(app: *const App) bool {
+    const state = app.xkb_state orelse return false;
+    const keymap = app.xkb_keymap orelse return false;
+    const ctrl_index = c.xkb_keymap_mod_get_index(keymap, c.XKB_MOD_NAME_CTRL);
+    if (ctrl_index == c.XKB_MOD_INVALID) return false;
+    return c.xkb_state_mod_index_is_active(state, ctrl_index, c.XKB_STATE_MODS_EFFECTIVE) == 1;
 }

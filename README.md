@@ -6,7 +6,7 @@
 
 O `Axia-DE` é um desktop environment experimental construído sobre `wlroots`, com uma arquitetura separada por domínios do sistema. A proposta do projeto é evoluir o shell aos poucos, mantendo controle sobre compositor, painel, dock, launcher e apps nativas.
 
-Hoje o projeto já vai além de um protótipo visual: ele possui fluxo real de sessão, apps integradas, configurações persistidas, popups do sistema e recursos de shell como preview de janelas, encaixe por arrasto e efeitos de vidro na top bar e na dock.
+Hoje o projeto já vai além de um protótipo visual: ele possui fluxo real de sessão, apps integradas, configurações persistidas, popups do sistema e recursos de shell como preview de janelas, encaixe por arrasto e efeitos de vidro no painel e na dock.
 
 ## Destaques Atuais
 
@@ -23,7 +23,7 @@ Hoje o projeto já vai além de um protótipo visual: ele possui fluxo real de s
 ### Interface do sistema
 
 - top bar com efeito glassmorphism real
-- dock V2 em `GTK4 + gtk4-layer-shell`, fixa, com preview, reorder e preferências persistidas
+- dock com efeito glassmorphism real, auto-hide e preferências persistidas
 - launcher com descoberta dinâmica de apps via `.desktop`
 - recentes e favoritos persistidos
 - ícones reais na dock e no launcher
@@ -62,27 +62,24 @@ src/input/     teclado, ponteiro e atalhos
 src/shell/     xdg-shell, views, workspaces, snapping e previews
 src/layers/    integração com layer-shell
 src/render/    scene graph, wallpaper e efeitos visuais
-src/apps/      files, settings e apps nativas restantes em Zig
+src/panel/     top bar e popups do sistema
+src/dock/      dock, auto-hide, preview e integração com o compositor
+src/apps/      launcher, files, settings e catálogo de apps
 src/config/    preferências persistidas e estado local
 src/ipc/       comunicação entre compositor e componentes do shell
-src/protocols/ bootstrap dos protocolos Wayland do compositor
-shell-v2/      top bar, dock, launcher, power e shells GTK da V2
 protocols/     XMLs vendorizados dos protocolos Wayland
 docs/          roadmap, notas técnicas e planejamento
 ```
 
 ## Binários Gerados
 
-Ao compilar, o projeto instala estes componentes principais:
+Ao compilar, o projeto instala estes componentes:
 
 - `axia-de`
-<<<<<<< HEAD
 - `axia-panel`
 - `axia-dock`
 - `axia-launcher`
 - `axia-app-grid`
-=======
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
 - `axia-files`
 - `axia-settings`
 
@@ -267,11 +264,6 @@ Documentos técnicos relacionados:
 
 - [docs/glassmorphism.md](docs/glassmorphism.md)
 - [docs/glassmorphism-plan.md](docs/glassmorphism-plan.md)
-- [docs/architecture-v2.md](docs/architecture-v2.md)
-- [docs/backlog-v2.md](docs/backlog-v2.md)
-- [docs/gtk-shell-checklist.md](docs/gtk-shell-checklist.md)
-- [docs/protocol-matrix.md](docs/protocol-matrix.md)
-- [docs/testing-session.md](docs/testing-session.md)
 
 ## Filosofia do Projeto
 

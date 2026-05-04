@@ -5,7 +5,8 @@ const c = @cImport({
 });
 
 pub const sidebar_count: usize = 8;
-pub const visible_entry_count: usize = 12;
+pub const max_visible_entry_count: usize = 192;
+pub const max_pinned_count: usize = 12;
 
 pub const EntryKind = enum {
     directory,
@@ -23,15 +24,24 @@ pub const Entry = struct {
 
 pub const EntryView = struct {
     kind: EntryKind = .file,
+    selected: bool = false,
     name: [120]u8 = [_]u8{0} ** 120,
     name_len: usize = 0,
+    path: [std.fs.max_path_bytes]u8 = [_]u8{0} ** std.fs.max_path_bytes,
+    path_len: usize = 0,
     modified: [64]u8 = [_]u8{0} ** 64,
     modified_len: usize = 0,
     size: [32]u8 = [_]u8{0} ** 32,
     size_len: usize = 0,
+    modified_unix: i64 = 0,
+    file_size_bytes: u64 = 0,
 
     pub fn text(self: *const EntryView) []const u8 {
         return self.name[0..self.name_len];
+    }
+
+    pub fn pathText(self: *const EntryView) []const u8 {
+        return self.path[0..self.path_len];
     }
 
     pub fn modifiedText(self: *const EntryView) []const u8 {
@@ -43,6 +53,21 @@ pub const EntryView = struct {
     }
 };
 
+pub const PinnedFolderView = struct {
+    label: [96]u8 = [_]u8{0} ** 96,
+    label_len: usize = 0,
+    path: [std.fs.max_path_bytes]u8 = [_]u8{0} ** std.fs.max_path_bytes,
+    path_len: usize = 0,
+
+    pub fn labelText(self: *const PinnedFolderView) []const u8 {
+        return self.label[0..self.label_len];
+    }
+
+    pub fn pathText(self: *const PinnedFolderView) []const u8 {
+        return self.path[0..self.path_len];
+    }
+};
+
 pub const Snapshot = struct {
     current_dir: []const u8 = "",
     selected_path: []const u8 = "",
@@ -50,6 +75,8 @@ pub const Snapshot = struct {
     current_sidebar: ?SidebarTarget = null,
     selected_visible: bool = false,
     selected_visible_index: usize = 0,
+    selected_count: usize = 0,
+    selected_file_count: usize = 0,
     selected_is_file: bool = false,
     count: usize = 0,
     total_count: usize = 0,
@@ -57,12 +84,21 @@ pub const Snapshot = struct {
     has_previous: bool = false,
     has_next: bool = false,
     modified_descending: bool = true,
-    entries: [visible_entry_count]EntryView = [_]EntryView{.{}} ** visible_entry_count,
+    entries: [max_visible_entry_count]EntryView = [_]EntryView{.{}} ** max_visible_entry_count,
+    selected_size: [32]u8 = [_]u8{0} ** 32,
+    selected_size_len: usize = 0,
+    pinned_count: usize = 0,
+    pinned: [max_pinned_count]PinnedFolderView = [_]PinnedFolderView{.{}} ** max_pinned_count,
+
+    pub fn selectedSizeText(self: *const Snapshot) []const u8 {
+        return self.selected_size[0..self.selected_size_len];
+    }
 };
 
 pub const SortField = enum {
     name,
     modified,
+    size,
 };
 
 pub const SidebarTarget = enum {
@@ -79,6 +115,11 @@ pub const SidebarTarget = enum {
 pub const Mode = enum {
     browser,
     wallpaper_picker,
+};
+
+const PinnedFolder = struct {
+    label: []u8,
+    path: []u8,
 };
 
 pub const sidebar_items = [_]struct {
@@ -102,21 +143,31 @@ pub const Browser = struct {
     mode: Mode = .browser,
     current_dir: ?[]u8 = null,
     selected_path: ?[]u8 = null,
+    selected_paths: std.ArrayListUnmanaged([]u8) = .empty,
     entries: std.ArrayListUnmanaged(Entry) = .empty,
+    pinned_folders: std.ArrayListUnmanaged(PinnedFolder) = .empty,
     page_start: usize = 0,
     sort_field: SortField = .modified,
     modified_descending: bool = true,
     current_sidebar: ?SidebarTarget = null,
 
     pub fn init(allocator: std.mem.Allocator, mode: Mode) Browser {
-        return .{
+        var result = Browser{
             .allocator = allocator,
             .mode = mode,
         };
+        result.loadPinnedFolders() catch |err| {
+            std.log.scoped(.axia_files).warn("failed to load pinned folders: {}", .{err});
+        };
+        return result;
     }
 
     pub fn deinit(self: *Browser) void {
         self.clearEntries();
+        self.clearSelection();
+        self.selected_paths.deinit(self.allocator);
+        self.clearPinnedFolders();
+        self.pinned_folders.deinit(self.allocator);
         if (self.current_dir) |dir| self.allocator.free(dir);
         if (self.selected_path) |path| self.allocator.free(path);
     }
@@ -157,6 +208,11 @@ pub const Browser = struct {
             else => return err,
         };
         self.current_sidebar = target;
+    }
+
+    pub fn openPinnedFolder(self: *Browser, index: usize) !void {
+        if (index >= self.pinned_folders.items.len) return;
+        try self.openDirectory(self.pinned_folders.items[index].path);
     }
 
     pub fn openDirectory(self: *Browser, path: []const u8) !void {
@@ -203,10 +259,7 @@ pub const Browser = struct {
         self.current_dir = try self.allocator.dupe(u8, normalized);
         self.current_sidebar = inferSidebarTarget(self.allocator, normalized);
         self.page_start = 0;
-        if (self.selected_path) |selected| {
-            self.allocator.free(selected);
-            self.selected_path = null;
-        }
+        self.clearSelection();
     }
 
     pub fn goParent(self: *Browser) !void {
@@ -216,15 +269,17 @@ pub const Browser = struct {
         try self.openDirectory(parent);
     }
 
-    pub fn nextPage(self: *Browser) void {
-        if (self.page_start + visible_entry_count < self.entries.items.len) {
-            self.page_start += visible_entry_count;
+    pub fn nextPage(self: *Browser, visible_limit: usize) void {
+        const limit = boundedVisibleLimit(visible_limit);
+        if (self.page_start + limit < self.entries.items.len) {
+            self.page_start = @min(self.page_start + limit, self.maxPageStartFor(limit));
         }
     }
 
-    pub fn previousPage(self: *Browser) void {
-        if (self.page_start >= visible_entry_count) {
-            self.page_start -= visible_entry_count;
+    pub fn previousPage(self: *Browser, visible_limit: usize) void {
+        const limit = boundedVisibleLimit(visible_limit);
+        if (self.page_start >= limit) {
+            self.page_start -= limit;
         } else {
             self.page_start = 0;
         }
@@ -240,9 +295,25 @@ pub const Browser = struct {
         self.sortEntries();
     }
 
-    pub fn scrollLines(self: *Browser, delta: isize) void {
+    pub fn sortByName(self: *Browser) void {
+        self.sort_field = .name;
+        self.sortEntries();
+    }
+
+    pub fn sortByModified(self: *Browser) void {
+        self.sort_field = .modified;
+        self.modified_descending = true;
+        self.sortEntries();
+    }
+
+    pub fn sortBySize(self: *Browser) void {
+        self.sort_field = .size;
+        self.sortEntries();
+    }
+
+    pub fn scrollItems(self: *Browser, delta: isize, visible_limit: usize) void {
         if (delta == 0) return;
-        const max_start = self.maxPageStart();
+        const max_start = self.maxPageStartFor(boundedVisibleLimit(visible_limit));
         if (delta > 0) {
             const next = self.page_start + @as(usize, @intCast(delta));
             self.page_start = @min(next, max_start);
@@ -251,6 +322,47 @@ pub const Browser = struct {
 
         const amount: usize = @intCast(-delta);
         self.page_start = self.page_start -| amount;
+    }
+
+    pub fn isCurrentDirectoryPinned(self: *const Browser) bool {
+        const current_dir = self.current_dir orelse return false;
+        return self.findPinnedFolder(current_dir) != null;
+    }
+
+    pub fn canPinSelection(self: *const Browser) bool {
+        const entry = self.selectedEntry() orelse return false;
+        return entry.kind == .directory and self.findPinnedFolder(entry.path) == null;
+    }
+
+    pub fn canUnpinSelection(self: *const Browser) bool {
+        const entry = self.selectedEntry() orelse return false;
+        return entry.kind == .directory and self.findPinnedFolder(entry.path) != null;
+    }
+
+    pub fn canUnpinCurrentDirectory(self: *const Browser) bool {
+        const current_dir = self.current_dir orelse return false;
+        return self.findPinnedFolder(current_dir) != null;
+    }
+
+    pub fn pinSelectedDirectory(self: *Browser) !void {
+        const entry = self.selectedEntry() orelse return error.NoSelection;
+        if (entry.kind != .directory) return error.NoSelection;
+        try self.pinDirectory(entry.path);
+    }
+
+    pub fn pinCurrentDirectory(self: *Browser) !void {
+        const current_dir = self.current_dir orelse return error.NoCurrentDirectory;
+        try self.pinDirectory(current_dir);
+    }
+
+    pub fn unpinSelectedDirectory(self: *Browser) !void {
+        const entry = self.selectedEntry() orelse return error.NoSelection;
+        try self.unpinDirectory(entry.path);
+    }
+
+    pub fn unpinCurrentDirectory(self: *Browser) !void {
+        const current_dir = self.current_dir orelse return error.NoCurrentDirectory;
+        try self.unpinDirectory(current_dir);
     }
 
     pub fn visibleEntry(self: *Browser, visible_index: usize) ?Entry {
@@ -263,8 +375,16 @@ pub const Browser = struct {
         return self.selected_path;
     }
 
+    pub fn currentDirectory(self: *const Browser) ?[]const u8 {
+        return self.current_dir;
+    }
+
     pub fn hasSelection(self: *const Browser) bool {
         return self.selectedEntry() != null;
+    }
+
+    pub fn selectedCount(self: *const Browser) usize {
+        return self.selected_paths.items.len;
     }
 
     pub fn hasSelectedFile(self: *const Browser) bool {
@@ -278,7 +398,10 @@ pub const Browser = struct {
     }
 
     pub fn isSelectedPath(self: *const Browser, path: []const u8) bool {
-        return self.selected_path != null and std.mem.eql(u8, self.selected_path.?, path);
+        for (self.selected_paths.items) |selected| {
+            if (std.mem.eql(u8, selected, path)) return true;
+        }
+        return false;
     }
 
     pub fn selectedName(self: *const Browser) ?[]const u8 {
@@ -307,6 +430,20 @@ pub const Browser = struct {
         try self.selectPath(target_path);
     }
 
+    pub fn createFileNamed(self: *Browser, name: []const u8) !void {
+        const current_dir = self.current_dir orelse return error.NoCurrentDirectory;
+        const trimmed = std.mem.trim(u8, name, " \t\r\n");
+        if (trimmed.len == 0) return error.InvalidName;
+        if (std.mem.indexOfScalar(u8, trimmed, '/') != null) return error.InvalidName;
+
+        const target_path = try std.fs.path.join(self.allocator, &.{ current_dir, trimmed });
+        defer self.allocator.free(target_path);
+        var file = try std.fs.createFileAbsolute(target_path, .{ .exclusive = true });
+        file.close();
+        try self.openDirectory(current_dir);
+        try self.selectPath(target_path);
+    }
+
     pub fn renameSelectedTo(self: *Browser, name: []const u8) !void {
         const current_dir = self.current_dir orelse return error.NoCurrentDirectory;
         const selected = self.selectedEntry() orelse return error.NoSelection;
@@ -328,7 +465,6 @@ pub const Browser = struct {
         }
 
         const current_dir = self.current_dir orelse return error.NoCurrentDirectory;
-        const selected = self.selectedEntry() orelse return error.NoSelection;
         const trash_files = try self.trashFilesDir();
         defer self.allocator.free(trash_files);
         const trash_info = try self.trashInfoDir();
@@ -337,28 +473,71 @@ pub const Browser = struct {
         try ensureDirectoryPath(trash_files);
         try ensureDirectoryPath(trash_info);
 
-        const trashed_name = try uniqueTrashName(self.allocator, trash_files, selected.name);
-        defer self.allocator.free(trashed_name);
+        if (self.selected_paths.items.len == 0) return error.NoSelection;
+        for (self.selected_paths.items) |path| {
+            const selected = self.entryForPath(path) orelse continue;
+            const trashed_name = try uniqueTrashName(self.allocator, trash_files, selected.name);
+            defer self.allocator.free(trashed_name);
 
-        const destination_path = try std.fs.path.join(self.allocator, &.{ trash_files, trashed_name });
-        defer self.allocator.free(destination_path);
+            const destination_path = try std.fs.path.join(self.allocator, &.{ trash_files, trashed_name });
+            defer self.allocator.free(destination_path);
 
-        try std.fs.renameAbsolute(selected.path, destination_path);
-        try self.writeTrashInfo(trashed_name, selected.path);
+            try std.fs.renameAbsolute(selected.path, destination_path);
+            try self.writeTrashInfo(trashed_name, selected.path);
+        }
         try self.openDirectory(current_dir);
     }
 
     pub fn deleteSelectedPermanently(self: *Browser) !void {
         const current_dir = self.current_dir orelse return error.NoCurrentDirectory;
-        const selected = self.selectedEntry() orelse return error.NoSelection;
-        switch (selected.kind) {
-            .directory => try std.fs.deleteTreeAbsolute(selected.path),
-            .file => try std.fs.deleteFileAbsolute(selected.path),
-        }
-        if (self.isViewingTrash()) {
-            try self.removeTrashInfoFor(selected.name);
+        if (self.selected_paths.items.len == 0) return error.NoSelection;
+        for (self.selected_paths.items) |path| {
+            const selected = self.entryForPath(path) orelse continue;
+            switch (selected.kind) {
+                .directory => try std.fs.deleteTreeAbsolute(selected.path),
+                .file => try std.fs.deleteFileAbsolute(selected.path),
+            }
+            if (self.isViewingTrash()) {
+                try self.removeTrashInfoFor(selected.name);
+            }
         }
         try self.openDirectory(current_dir);
+    }
+
+    pub fn pastePaths(self: *Browser, paths: []const []const u8) !usize {
+        const current_dir = self.current_dir orelse return error.NoCurrentDirectory;
+        var pasted: usize = 0;
+        var last_pasted: ?[]u8 = null;
+        defer if (last_pasted) |path| self.allocator.free(path);
+
+        for (paths) |source| {
+            if (source.len == 0) continue;
+            const normalized = try normalizeAbsolute(self.allocator, source);
+            defer self.allocator.free(normalized);
+            if (std.mem.eql(u8, normalized, current_dir)) continue;
+
+            const name = basenameLabel(normalized);
+            const target_name = try uniqueNameInDir(self.allocator, current_dir, name);
+            defer self.allocator.free(target_name);
+            const target_path = try std.fs.path.join(self.allocator, &.{ current_dir, target_name });
+            defer self.allocator.free(target_path);
+
+            if (isDirectoryPath(normalized)) {
+                try copyDirectoryRecursive(self.allocator, normalized, target_path);
+            } else {
+                try std.fs.copyFileAbsolute(normalized, target_path, .{});
+            }
+
+            if (last_pasted) |path| self.allocator.free(path);
+            last_pasted = try self.allocator.dupe(u8, target_path);
+            pasted += 1;
+        }
+
+        if (pasted > 0) {
+            try self.openDirectory(current_dir);
+            if (last_pasted) |path| try self.selectPath(path);
+        }
+        return pasted;
     }
 
     pub fn isViewingTrash(self: *const Browser) bool {
@@ -367,8 +546,24 @@ pub const Browser = struct {
 
     pub fn selectVisible(self: *Browser, visible_index: usize) !void {
         const entry = self.visibleEntry(visible_index) orelse return;
-        if (self.selected_path) |selected| self.allocator.free(selected);
-        self.selected_path = try self.allocator.dupe(u8, entry.path);
+        try self.setSingleSelection(entry.path);
+    }
+
+    pub fn selectAll(self: *Browser) !void {
+        self.clearSelection();
+        for (self.entries.items) |entry| {
+            try self.addSelectedPath(entry.path);
+        }
+        if (self.entries.items.len > 0) {
+            try self.setPrimarySelection(self.entries.items[0].path);
+        }
+    }
+
+    pub fn toggleVisibleSelection(self: *Browser, visible_index: usize) !void {
+        const entry = self.visibleEntry(visible_index) orelse return;
+        if (self.removeSelectedPath(entry.path)) return;
+        try self.addSelectedPath(entry.path);
+        try self.setPrimarySelection(entry.path);
     }
 
     pub fn activateVisible(self: *Browser, visible_index: usize) !void {
@@ -376,33 +571,56 @@ pub const Browser = struct {
         switch (entry.kind) {
             .directory => try self.openDirectory(entry.path),
             .file => {
-                if (self.selected_path) |selected| self.allocator.free(selected);
-                self.selected_path = try self.allocator.dupe(u8, entry.path);
+                try self.setSingleSelection(entry.path);
             },
         }
     }
 
-    pub fn snapshot(self: *Browser) Snapshot {
+    pub fn snapshot(self: *Browser, visible_limit: usize) Snapshot {
         var state = Snapshot{};
         state.current_dir = self.current_dir orelse "";
         state.selected_path = self.selected_path orelse "";
-        state.selected_exists = self.selectedEntry() != null;
+        state.selected_count = self.selected_paths.items.len;
+        state.selected_exists = state.selected_count > 0;
         state.current_sidebar = self.current_sidebar;
         state.total_count = self.entries.items.len;
+        const limit = boundedVisibleLimit(visible_limit);
+        if (self.page_start > self.maxPageStartFor(limit)) self.page_start = self.maxPageStartFor(limit);
         state.page_start = self.page_start;
         state.has_previous = self.page_start > 0;
-        state.has_next = self.page_start + visible_entry_count < self.entries.items.len;
+        state.has_next = self.page_start + limit < self.entries.items.len;
         state.modified_descending = self.modified_descending;
         state.selected_is_file = self.hasSelectedFile();
+        var selected_total_size: u64 = 0;
+        for (self.selected_paths.items) |path| {
+            const selected = self.entryForPath(path) orelse continue;
+            if (selected.kind == .file) {
+                state.selected_file_count += 1;
+                selected_total_size += selected.file_size_bytes;
+            }
+        }
+        if (state.selected_count == 1) {
+            if (self.selectedEntry()) |selected| {
+                state.selected_size_len = formatSize(selected, state.selected_size[0..]);
+            }
+        } else if (state.selected_count > 1 and state.selected_file_count == state.selected_count) {
+            state.selected_size_len = formatByteSize(selected_total_size, state.selected_size[0..]);
+        }
 
-        const end = @min(self.entries.items.len, self.page_start + visible_entry_count);
+        const end = @min(self.entries.items.len, self.page_start + limit);
         state.count = end - self.page_start;
         for (0..state.count) |visible_index| {
             const entry = self.entries.items[self.page_start + visible_index];
             state.entries[visible_index].kind = entry.kind;
+            state.entries[visible_index].selected = self.isSelectedPath(entry.path);
             const len = @min(entry.name.len, state.entries[visible_index].name.len);
             @memcpy(state.entries[visible_index].name[0..len], entry.name[0..len]);
             state.entries[visible_index].name_len = len;
+            const path_len = @min(entry.path.len, state.entries[visible_index].path.len);
+            @memcpy(state.entries[visible_index].path[0..path_len], entry.path[0..path_len]);
+            state.entries[visible_index].path_len = path_len;
+            state.entries[visible_index].modified_unix = entry.modified_unix;
+            state.entries[visible_index].file_size_bytes = entry.file_size_bytes;
             state.entries[visible_index].modified_len = formatModified(
                 entry.modified_unix,
                 state.entries[visible_index].modified[0..],
@@ -411,10 +629,17 @@ pub const Browser = struct {
                 entry,
                 state.entries[visible_index].size[0..],
             );
-            if (self.selected_path != null and std.mem.eql(u8, entry.path, self.selected_path.?)) {
+            if (state.entries[visible_index].selected) {
                 state.selected_visible = true;
                 state.selected_visible_index = visible_index;
             }
+        }
+
+        state.pinned_count = @min(self.pinned_folders.items.len, max_pinned_count);
+        for (0..state.pinned_count) |index| {
+            const pinned = self.pinned_folders.items[index];
+            state.pinned[index].label_len = writeText(state.pinned[index].label[0..], pinned.label);
+            state.pinned[index].path_len = writeText(state.pinned[index].path[0..], pinned.path);
         }
         return state;
     }
@@ -431,33 +656,159 @@ pub const Browser = struct {
     fn sortEntries(self: *Browser) void {
         std.sort.heap(Entry, self.entries.items, self.*, lessThan);
         if (self.page_start >= self.entries.items.len and self.entries.items.len > 0) {
-            self.page_start = ((self.entries.items.len - 1) / visible_entry_count) * visible_entry_count;
+            self.page_start = self.maxPageStartFor(max_visible_entry_count);
         }
     }
 
-    fn maxPageStart(self: *const Browser) usize {
-        if (self.entries.items.len <= visible_entry_count) return 0;
-        return self.entries.items.len - visible_entry_count;
+    fn maxPageStartFor(self: *const Browser, visible_limit: usize) usize {
+        const limit = boundedVisibleLimit(visible_limit);
+        if (self.entries.items.len <= limit) return 0;
+        return self.entries.items.len - limit;
     }
 
     fn selectedEntry(self: *const Browser) ?Entry {
         const selected = self.selected_path orelse return null;
+        return self.entryForPath(selected);
+    }
+
+    fn entryForPath(self: *const Browser, selected: []const u8) ?Entry {
         for (self.entries.items) |entry| {
             if (std.mem.eql(u8, entry.path, selected)) return entry;
         }
         return null;
     }
 
+    fn setSingleSelection(self: *Browser, path: []const u8) !void {
+        self.clearSelection();
+        try self.addSelectedPath(path);
+        try self.setPrimarySelection(path);
+    }
+
+    fn addSelectedPath(self: *Browser, path: []const u8) !void {
+        if (self.isSelectedPath(path)) return;
+        try self.selected_paths.append(self.allocator, try self.allocator.dupe(u8, path));
+    }
+
+    fn removeSelectedPath(self: *Browser, path: []const u8) bool {
+        for (self.selected_paths.items, 0..) |selected, index| {
+            if (!std.mem.eql(u8, selected, path)) continue;
+            const removed = self.selected_paths.orderedRemove(index);
+            self.allocator.free(removed);
+            if (self.selected_path != null and std.mem.eql(u8, self.selected_path.?, path)) {
+                self.allocator.free(self.selected_path.?);
+                self.selected_path = null;
+                if (self.selected_paths.items.len > 0) {
+                    self.selected_path = self.allocator.dupe(u8, self.selected_paths.items[0]) catch null;
+                }
+            }
+            return true;
+        }
+        return false;
+    }
+
+    fn setPrimarySelection(self: *Browser, path: []const u8) !void {
+        if (self.selected_path) |selected| self.allocator.free(selected);
+        self.selected_path = try self.allocator.dupe(u8, path);
+    }
+
+    fn clearSelection(self: *Browser) void {
+        if (self.selected_path) |selected| self.allocator.free(selected);
+        self.selected_path = null;
+        for (self.selected_paths.items) |selected| self.allocator.free(selected);
+        self.selected_paths.clearRetainingCapacity();
+    }
+
     fn selectPath(self: *Browser, path: []const u8) !void {
         for (self.entries.items, 0..) |entry, index| {
             if (!std.mem.eql(u8, entry.path, path)) continue;
-            if (self.selected_path) |selected| self.allocator.free(selected);
-            self.selected_path = try self.allocator.dupe(u8, entry.path);
-            if (index < self.page_start or index >= self.page_start + visible_entry_count) {
-                self.page_start = (index / visible_entry_count) * visible_entry_count;
+            try self.setSingleSelection(entry.path);
+            if (index < self.page_start or index >= self.page_start + max_visible_entry_count) {
+                self.page_start = (index / max_visible_entry_count) * max_visible_entry_count;
             }
             return;
         }
+    }
+
+    fn pinDirectory(self: *Browser, path: []const u8) !void {
+        if (self.findPinnedFolder(path) != null) return;
+        if (self.pinned_folders.items.len >= max_pinned_count) return error.TooManyPinnedFolders;
+
+        const normalized = try normalizeAbsolute(self.allocator, path);
+        defer self.allocator.free(normalized);
+
+        var dir = try std.fs.openDirAbsolute(normalized, .{});
+        dir.close();
+
+        try self.pinned_folders.append(self.allocator, .{
+            .label = try self.allocator.dupe(u8, basenameLabel(normalized)),
+            .path = try self.allocator.dupe(u8, normalized),
+        });
+        try self.savePinnedFolders();
+    }
+
+    fn unpinDirectory(self: *Browser, path: []const u8) !void {
+        const index = self.findPinnedFolder(path) orelse return;
+        const removed = self.pinned_folders.orderedRemove(index);
+        self.allocator.free(removed.label);
+        self.allocator.free(removed.path);
+        try self.savePinnedFolders();
+    }
+
+    fn findPinnedFolder(self: *const Browser, path: []const u8) ?usize {
+        for (self.pinned_folders.items, 0..) |pinned, index| {
+            if (std.mem.eql(u8, pinned.path, path)) return index;
+        }
+        return null;
+    }
+
+    fn clearPinnedFolders(self: *Browser) void {
+        for (self.pinned_folders.items) |pinned| {
+            self.allocator.free(pinned.label);
+            self.allocator.free(pinned.path);
+        }
+        self.pinned_folders.clearRetainingCapacity();
+    }
+
+    fn loadPinnedFolders(self: *Browser) !void {
+        const path = try pinnedFoldersPath(self.allocator);
+        defer self.allocator.free(path);
+
+        const contents = std.fs.cwd().readFileAlloc(self.allocator, path, 64 * 1024) catch |err| switch (err) {
+            error.FileNotFound => return,
+            else => return err,
+        };
+        defer self.allocator.free(contents);
+
+        var lines = std.mem.tokenizeScalar(u8, contents, '\n');
+        while (lines.next()) |line_raw| {
+            if (self.pinned_folders.items.len >= max_pinned_count) break;
+            const line = std.mem.trim(u8, line_raw, " \r\t");
+            if (line.len == 0 or line[0] == '#') continue;
+            if (self.findPinnedFolder(line) != null) continue;
+            var dir = std.fs.openDirAbsolute(line, .{}) catch continue;
+            dir.close();
+            try self.pinned_folders.append(self.allocator, .{
+                .label = try self.allocator.dupe(u8, basenameLabel(line)),
+                .path = try self.allocator.dupe(u8, line),
+            });
+        }
+    }
+
+    fn savePinnedFolders(self: *Browser) !void {
+        const dir_path = try axiaConfigDir(self.allocator);
+        defer self.allocator.free(dir_path);
+        try std.fs.cwd().makePath(dir_path);
+
+        const path = try pinnedFoldersPath(self.allocator);
+        defer self.allocator.free(path);
+
+        var contents = std.array_list.Managed(u8).init(self.allocator);
+        defer contents.deinit();
+        try contents.appendSlice("# Axia Files pinned folders\n");
+        for (self.pinned_folders.items) |pinned| {
+            try contents.writer().print("{s}\n", .{pinned.path});
+        }
+        try std.fs.cwd().writeFile(.{ .sub_path = path, .data = contents.items });
     }
 
     fn trashBaseDir(self: *const Browser) ![]u8 {
@@ -561,6 +912,19 @@ fn pathExists(base_dir: []const u8, name: []const u8) bool {
     return true;
 }
 
+fn uniqueNameInDir(allocator: std.mem.Allocator, base_dir: []const u8, original_name: []const u8) ![]u8 {
+    var candidate = try allocator.dupe(u8, original_name);
+    errdefer allocator.free(candidate);
+
+    var index: usize = 1;
+    while (pathExists(base_dir, candidate)) {
+        allocator.free(candidate);
+        candidate = try appendDuplicateSuffix(allocator, original_name, index);
+        index += 1;
+    }
+    return candidate;
+}
+
 fn appendDuplicateSuffix(allocator: std.mem.Allocator, original_name: []const u8, index: usize) ![]u8 {
     const extension = std.fs.path.extension(original_name);
     if (extension.len == 0 or extension.len == original_name.len) {
@@ -583,6 +947,65 @@ fn normalizeAbsolute(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     const cwd = try std.process.getCwdAlloc(allocator);
     defer allocator.free(cwd);
     return try std.fs.path.join(allocator, &.{ cwd, path });
+}
+
+fn isDirectoryPath(path: []const u8) bool {
+    var dir = std.fs.openDirAbsolute(path, .{}) catch return false;
+    dir.close();
+    return true;
+}
+
+fn copyDirectoryRecursive(allocator: std.mem.Allocator, source: []const u8, destination: []const u8) !void {
+    try std.fs.makeDirAbsolute(destination);
+    var source_dir = try std.fs.openDirAbsolute(source, .{ .iterate = true });
+    defer source_dir.close();
+
+    var iterator = source_dir.iterate();
+    while (try iterator.next()) |entry| {
+        if (entry.name.len == 0) continue;
+        const source_child = try std.fs.path.join(allocator, &.{ source, entry.name });
+        defer allocator.free(source_child);
+        const destination_child = try std.fs.path.join(allocator, &.{ destination, entry.name });
+        defer allocator.free(destination_child);
+
+        switch (entry.kind) {
+            .directory => try copyDirectoryRecursive(allocator, source_child, destination_child),
+            .file => try std.fs.copyFileAbsolute(source_child, destination_child, .{}),
+            else => {},
+        }
+    }
+}
+
+fn boundedVisibleLimit(value: usize) usize {
+    return std.math.clamp(value, 1, max_visible_entry_count);
+}
+
+fn basenameLabel(path: []const u8) []const u8 {
+    if (path.len == 0) return "Pasta";
+    const base = std.fs.path.basename(path);
+    if (base.len == 0) return path;
+    return base;
+}
+
+fn pinnedFoldersPath(allocator: std.mem.Allocator) ![]u8 {
+    const dir_path = try axiaConfigDir(allocator);
+    defer allocator.free(dir_path);
+    return try std.fs.path.join(allocator, &.{ dir_path, "files-pins.conf" });
+}
+
+fn axiaConfigDir(allocator: std.mem.Allocator) ![]u8 {
+    const config_home = std.process.getEnvVarOwned(allocator, "XDG_CONFIG_HOME") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => null,
+        else => return err,
+    };
+    if (config_home) |value| {
+        defer allocator.free(value);
+        if (value.len > 0) return try std.fs.path.join(allocator, &.{ value, "axia-de" });
+    }
+
+    const home = try std.process.getEnvVarOwned(allocator, "HOME");
+    defer allocator.free(home);
+    return try std.fs.path.join(allocator, &.{ home, ".config", "axia-de" });
 }
 
 fn isSupportedImage(name: []const u8) bool {
@@ -610,6 +1033,12 @@ fn lessThan(browser_state: Browser, lhs: Entry, rhs: Entry) bool {
                 else
                     lhs.modified_unix < rhs.modified_unix;
             }
+            break :blk std.ascii.lessThanIgnoreCase(lhs.name, rhs.name);
+        },
+        .size => blk: {
+            const lhs_size = if (lhs.kind == .directory) lhs.child_count else lhs.file_size_bytes;
+            const rhs_size = if (rhs.kind == .directory) rhs.child_count else rhs.file_size_bytes;
+            if (lhs_size != rhs_size) break :blk lhs_size > rhs_size;
             break :blk std.ascii.lessThanIgnoreCase(lhs.name, rhs.name);
         },
     };
@@ -686,6 +1115,11 @@ fn formatSize(entry: Entry, buffer: []u8) usize {
         .directory => std.fmt.bufPrint(buffer, "{d} itens", .{entry.child_count}) catch return writeText(buffer, "Pasta"),
         .file => std.fmt.bufPrint(buffer, "{d} bytes", .{entry.file_size_bytes}) catch return writeText(buffer, "Arquivo"),
     };
+    return text.len;
+}
+
+fn formatByteSize(bytes: u64, buffer: []u8) usize {
+    const text = std.fmt.bufPrint(buffer, "{d} bytes", .{bytes}) catch return writeText(buffer, "Arquivos");
     return text.len;
 }
 

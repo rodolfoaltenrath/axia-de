@@ -157,7 +157,6 @@ pub const App = struct {
         render.draw(buffer.cr, self.current_width, self.current_height, .{
             .page = self.page,
             .hovered = self.hovered,
-            .maximized = self.maximized,
             .current_wallpaper_path = self.current_wallpaper_path,
             .preferences = self.preferences,
             .runtime = self.runtime,
@@ -196,7 +195,6 @@ pub const App = struct {
             .{
                 .page = self.page,
                 .hovered = self.hovered,
-                .maximized = self.maximized,
                 .current_wallpaper_path = self.current_wallpaper_path,
                 .preferences = self.preferences,
                 .runtime = self.runtime,
@@ -286,7 +284,18 @@ pub const App = struct {
                     log.err("failed to save dock settings: {}", .{err});
                 };
             },
-            .dock_auto_hide, .dock_strong_hover => {},
+            .dock_auto_hide => {
+                self.preferences.dock_auto_hide = !self.preferences.dock_auto_hide;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save dock settings: {}", .{err});
+                };
+            },
+            .dock_strong_hover => {
+                self.preferences.dock_strong_hover = !self.preferences.dock_strong_hover;
+                self.savePreferences() catch |err| {
+                    log.err("failed to save dock settings: {}", .{err});
+                };
+            },
             .workspace_wrap => {
                 self.preferences.workspace_wrap = !self.preferences.workspace_wrap;
                 self.savePreferences() catch |err| {
@@ -353,8 +362,8 @@ pub const App = struct {
                 .medium => .medium,
                 .large => .large,
             },
-            .dock_auto_hide = false,
-            .dock_strong_hover = false,
+            .dock_auto_hide = self.preferences.dock_auto_hide,
+            .dock_strong_hover = self.preferences.dock_strong_hover,
             .workspace_wrap = self.preferences.workspace_wrap,
             .startup_workspace = self.preferences.startup_workspace,
         };
@@ -583,8 +592,8 @@ fn preferencesStateFromStored(stored: prefs.Preferences) settings_model.Preferen
             .medium => .medium,
             .large => .large,
         },
-        .dock_auto_hide = false,
-        .dock_strong_hover = false,
+        .dock_auto_hide = stored.dock_auto_hide,
+        .dock_strong_hover = stored.dock_strong_hover,
         .workspace_wrap = stored.workspace_wrap,
         .startup_workspace = stored.startup_workspace,
     };

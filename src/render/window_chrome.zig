@@ -35,7 +35,6 @@ pub const TitlebarStyle = struct {
     accent_glyph: []const u8 = "",
     accent_color: [3]f64 = .{ 0.40, 0.95, 1.0 },
     title_x: f64 = 54.0,
-<<<<<<< HEAD
     attached_to_edges: bool = false,
 };
 
@@ -52,40 +51,21 @@ pub fn rootRectStyled(width: u32, height: u32, attached_to_edges: bool) Rect {
             .height = @max(1.0, @as(f64, @floatFromInt(height)) - attached_bottom_shadow),
         };
     }
-=======
-    maximized: bool = false,
-};
-
-pub fn rootRect(width: u32, height: u32) Rect {
-    return rootRectForMode(width, height, false);
-}
-
-pub fn rootRectForMode(width: u32, height: u32, maximized: bool) Rect {
-    const margin: f64 = if (maximized) 0.0 else window_margin;
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     return .{
-        .x = margin,
-        .y = margin,
-        .width = @as(f64, @floatFromInt(width)) - margin * 2.0,
-        .height = @as(f64, @floatFromInt(height)) - margin * 2.0,
+        .x = window_margin,
+        .y = window_margin,
+        .width = @as(f64, @floatFromInt(width)) - window_margin * 2.0,
+        .height = @as(f64, @floatFromInt(height)) - window_margin * 2.0,
     };
 }
 
 pub fn titlebarRect(width: u32, height: u32) Rect {
-<<<<<<< HEAD
     return titlebarRectStyled(width, height, false);
 }
 
 pub fn titlebarRectStyled(width: u32, height: u32, attached_to_edges: bool) Rect {
     const root = rootRectStyled(width, height, attached_to_edges);
     const inset = if (attached_to_edges) @as(f64, 0) else @as(f64, 1);
-=======
-    return titlebarRectForMode(width, height, false);
-}
-
-pub fn titlebarRectForMode(width: u32, height: u32, maximized: bool) Rect {
-    const root = rootRectForMode(width, height, maximized);
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     return .{
         .x = root.x + inset,
         .y = root.y + inset,
@@ -95,7 +75,6 @@ pub fn titlebarRectForMode(width: u32, height: u32, maximized: bool) Rect {
 }
 
 pub fn titlebarDragRect(width: u32, height: u32, left_reserved: f64, right_reserved: f64) Rect {
-<<<<<<< HEAD
     return titlebarDragRectStyled(width, height, left_reserved, right_reserved, false);
 }
 
@@ -103,13 +82,6 @@ pub fn titlebarDragRectStyled(width: u32, height: u32, left_reserved: f64, right
     const root = rootRectStyled(width, height, attached_to_edges);
     const drag_top_inset = if (attached_to_edges) @as(f64, 0) else @as(f64, 2);
     const drag_height_adjust = if (attached_to_edges) @as(f64, 0) else @as(f64, 4);
-=======
-    return titlebarDragRectForMode(width, height, left_reserved, right_reserved, false);
-}
-
-pub fn titlebarDragRectForMode(width: u32, height: u32, left_reserved: f64, right_reserved: f64, maximized: bool) Rect {
-    const root = rootRectForMode(width, height, maximized);
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     return .{
         .x = root.x + left_reserved,
         .y = root.y + drag_top_inset,
@@ -119,37 +91,21 @@ pub fn titlebarDragRectForMode(width: u32, height: u32, left_reserved: f64, righ
 }
 
 pub fn minimizeRect(width: u32) Rect {
-    return minimizeRectForMode(width, false);
-}
-
-pub fn minimizeRectForMode(width: u32, maximized: bool) Rect {
-    const inset: f64 = if (maximized) 30.0 else 34.0;
-    const right = @as(f64, @floatFromInt(width)) - inset;
+    const right = @as(f64, @floatFromInt(width)) - 34;
     return .{ .x = right - 88, .y = 14, .width = 18, .height = 18 };
 }
 
 pub fn maximizeRect(width: u32) Rect {
-    return maximizeRectForMode(width, false);
-}
-
-pub fn maximizeRectForMode(width: u32, maximized: bool) Rect {
-    const inset: f64 = if (maximized) 30.0 else 34.0;
-    const right = @as(f64, @floatFromInt(width)) - inset;
+    const right = @as(f64, @floatFromInt(width)) - 34;
     return .{ .x = right - 52, .y = 14, .width = 18, .height = 18 };
 }
 
 pub fn closeRect(width: u32) Rect {
-    return closeRectForMode(width, false);
-}
-
-pub fn closeRectForMode(width: u32, maximized: bool) Rect {
-    const inset: f64 = if (maximized) 30.0 else 34.0;
-    const right = @as(f64, @floatFromInt(width)) - inset;
+    const right = @as(f64, @floatFromInt(width)) - 34;
     return .{ .x = right - 16, .y = 14, .width = 18, .height = 18 };
 }
 
 pub fn drawWindowShell(cr: *c.cairo_t, width: u32, height: u32, style: TitlebarStyle, hovered: HoveredControl) void {
-<<<<<<< HEAD
     const root = rootRectStyled(width, height, style.attached_to_edges);
     if (style.attached_to_edges) {
         c.cairo_rectangle(cr, root.x, root.y, root.width, root.height);
@@ -165,45 +121,19 @@ pub fn drawWindowShell(cr: *c.cairo_t, width: u32, height: u32, style: TitlebarS
         c.cairo_stroke(cr);
 
         const inner = Rect{
-=======
-    const root = rootRectForMode(width, height, style.maximized);
-    const radius: f64 = if (style.maximized) 0.0 else window_radius;
-    drawRoundedRect(cr, root, radius);
-    c.cairo_set_source_rgba(cr, 0.105, 0.105, 0.11, 0.972);
-    c.cairo_fill_preserve(cr);
-    if (!style.maximized) {
-        c.cairo_set_source_rgba(cr, 0.40, 0.95, 1.0, 0.95);
-        c.cairo_set_line_width(cr, 2.0);
-        c.cairo_stroke(cr);
-    } else {
-        c.cairo_new_path(cr);
-    }
-
-    if (!style.maximized) {
-        drawRoundedRect(cr, .{
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
             .x = root.x + 1.5,
             .y = root.y + 1.5,
             .width = root.width - 3.0,
             .height = root.height - 3.0,
-<<<<<<< HEAD
         };
         drawRoundedRect(cr, inner, window_radius - 1.5);
-=======
-        }, window_radius - 1.5);
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
         c.cairo_set_source_rgba(cr, 1, 1, 1, 0.04);
         c.cairo_set_line_width(cr, 1.0);
         c.cairo_stroke(cr);
     }
 
-<<<<<<< HEAD
     const bar = titlebarRectStyled(width, height, style.attached_to_edges);
     if (style.attached_to_edges) {
-=======
-    const bar = titlebarRectForMode(width, height, style.maximized);
-    if (style.maximized) {
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
         c.cairo_rectangle(cr, bar.x, bar.y, bar.width, bar.height);
     } else {
         drawTopRoundedRect(cr, bar, window_radius - 1.0);
@@ -220,9 +150,9 @@ pub fn drawWindowShell(cr: *c.cairo_t, width: u32, height: u32, style: TitlebarS
     }
     drawLabel(cr, style.title_x, 30, 15, style.title, 0.96, 0.97, 0.99, c.CAIRO_FONT_WEIGHT_BOLD);
 
-    drawWindowControl(cr, minimizeRectForMode(width, style.maximized), .minimize, hovered == .minimize);
-    drawWindowControl(cr, maximizeRectForMode(width, style.maximized), .maximize, hovered == .maximize);
-    drawWindowControl(cr, closeRectForMode(width, style.maximized), .close, hovered == .close);
+    drawWindowControl(cr, minimizeRect(width), .minimize, hovered == .minimize);
+    drawWindowControl(cr, maximizeRect(width), .maximize, hovered == .maximize);
+    drawWindowControl(cr, closeRect(width), .close, hovered == .close);
 }
 
 fn drawAttachedBottomShadow(cr: *c.cairo_t, width: u32, height: u32, root: Rect) void {
@@ -242,10 +172,6 @@ fn drawAttachedBottomShadow(cr: *c.cairo_t, width: u32, height: u32, root: Rect)
 }
 
 pub fn drawRoundedRect(cr: *c.cairo_t, rect: Rect, radius: f64) void {
-    if (radius <= 0.0) {
-        c.cairo_rectangle(cr, rect.x, rect.y, rect.width, rect.height);
-        return;
-    }
     const right = rect.x + rect.width;
     const bottom = rect.y + rect.height;
     c.cairo_new_sub_path(cr);
@@ -276,10 +202,6 @@ fn drawAccentGlyph(cr: *c.cairo_t, rect: Rect, glyph: []const u8, color: [3]f64)
 }
 
 fn drawTopRoundedRect(cr: *c.cairo_t, rect: Rect, radius: f64) void {
-    if (radius <= 0.0) {
-        c.cairo_rectangle(cr, rect.x, rect.y, rect.width, rect.height);
-        return;
-    }
     const right = rect.x + rect.width;
     const bottom = rect.y + rect.height;
     c.cairo_new_sub_path(cr);

@@ -1,3 +1,4 @@
+
 # Backlog de Tasks para Uso de Escritório
 
 Este documento quebra a evolução do Axia-DE em tasks menores, independentes o bastante para implementação incremental.

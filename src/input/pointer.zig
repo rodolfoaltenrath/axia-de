@@ -4,8 +4,7 @@ const c = @import("../wl.zig").c;
 const log = std.log.scoped(.axia_pointer);
 
 pub const CapabilitiesCallback = *const fn (?*anyopaque) void;
-pub const ActivityCallback = *const fn (?*anyopaque) void;
-pub const MotionCallback = *const fn (?*anyopaque, u32, f64, f64, f64, f64, f64, f64, f64, f64) void;
+pub const MotionCallback = *const fn (?*anyopaque, u32, f64, f64) void;
 pub const ButtonCallback = *const fn (?*anyopaque, u32, u32, c.enum_wl_pointer_button_state, f64, f64) void;
 
 const PointerDevice = struct {
@@ -52,8 +51,6 @@ pub const PointerManager = struct {
     listeners_ready: bool = false,
     capabilities_ctx: ?*anyopaque = null,
     capabilities_cb: ?CapabilitiesCallback = null,
-    activity_ctx: ?*anyopaque = null,
-    activity_cb: ?ActivityCallback = null,
     event_ctx: ?*anyopaque = null,
     motion_cb: ?MotionCallback = null,
     button_cb: ?ButtonCallback = null,
@@ -109,15 +106,6 @@ pub const PointerManager = struct {
         self.button_cb = button_callback;
     }
 
-    pub fn setActivityNotifier(
-        self: *PointerManager,
-        ctx: ?*anyopaque,
-        callback: ActivityCallback,
-    ) void {
-        self.activity_ctx = ctx;
-        self.activity_cb = callback;
-    }
-
     pub fn setupListeners(self: *PointerManager) void {
         self.motion.notify = handleMotion;
         self.motion_absolute.notify = handleMotionAbsolute;
@@ -168,10 +156,6 @@ pub const PointerManager = struct {
         return self.pointers.items.len;
     }
 
-    pub fn resetCursorToDefault(self: *PointerManager) void {
-        self.setDefaultCursor();
-    }
-
     fn unregisterPointer(self: *PointerManager, target: *PointerDevice) void {
         for (self.pointers.items, 0..) |pointer, index| {
             if (pointer == target) {
@@ -193,34 +177,15 @@ pub const PointerManager = struct {
         c.wlr_cursor_set_xcursor(self.cursor, self.xcursor_manager, "default");
     }
 
-    fn notifyActivity(self: *PointerManager) void {
-        if (self.activity_cb) |callback| {
-            callback(self.activity_ctx);
-        }
-    }
-
     fn handleMotion(listener: [*c]c.struct_wl_listener, data: ?*anyopaque) callconv(.c) void {
         const manager: *PointerManager = @ptrCast(@as(*allowzero PointerManager, @fieldParentPtr("motion", listener)));
         const raw_event = data orelse return;
         const event: *c.struct_wlr_pointer_motion_event = @ptrCast(@alignCast(raw_event));
 
-        manager.notifyActivity();
-        const old_x = manager.cursor.*.x;
-        const old_y = manager.cursor.*.y;
         c.wlr_cursor_move(manager.cursor, &event.pointer.*.base, event.delta_x, event.delta_y);
+        manager.setDefaultCursor();
         if (manager.motion_cb) |callback| {
-            callback(
-                manager.event_ctx,
-                event.time_msec,
-                old_x,
-                old_y,
-                manager.cursor.*.x,
-                manager.cursor.*.y,
-                event.delta_x,
-                event.delta_y,
-                event.unaccel_dx,
-                event.unaccel_dy,
-            );
+            callback(manager.event_ctx, event.time_msec, manager.cursor.*.x, manager.cursor.*.y);
         } else {
             c.wlr_seat_pointer_notify_clear_focus(manager.seat);
         }
@@ -231,25 +196,10 @@ pub const PointerManager = struct {
         const raw_event = data orelse return;
         const event: *c.struct_wlr_pointer_motion_absolute_event = @ptrCast(@alignCast(raw_event));
 
-        manager.notifyActivity();
-        const old_x = manager.cursor.*.x;
-        const old_y = manager.cursor.*.y;
         c.wlr_cursor_warp_absolute(manager.cursor, &event.pointer.*.base, event.x, event.y);
+        manager.setDefaultCursor();
         if (manager.motion_cb) |callback| {
-            const dx = manager.cursor.*.x - old_x;
-            const dy = manager.cursor.*.y - old_y;
-            callback(
-                manager.event_ctx,
-                event.time_msec,
-                old_x,
-                old_y,
-                manager.cursor.*.x,
-                manager.cursor.*.y,
-                dx,
-                dy,
-                dx,
-                dy,
-            );
+            callback(manager.event_ctx, event.time_msec, manager.cursor.*.x, manager.cursor.*.y);
         } else {
             c.wlr_seat_pointer_notify_clear_focus(manager.seat);
         }
@@ -260,7 +210,6 @@ pub const PointerManager = struct {
         const raw_event = data orelse return;
         const event: *c.struct_wlr_pointer_button_event = @ptrCast(@alignCast(raw_event));
 
-        manager.notifyActivity();
         if (manager.button_cb) |callback| {
             callback(
                 manager.event_ctx,
@@ -280,7 +229,6 @@ pub const PointerManager = struct {
         const raw_event = data orelse return;
         const event: *c.struct_wlr_pointer_axis_event = @ptrCast(@alignCast(raw_event));
 
-        manager.notifyActivity();
         c.wlr_seat_pointer_notify_axis(
             manager.seat,
             event.time_msec,

@@ -24,7 +24,6 @@ pub const Hit = settings_model.Hit;
 pub const State = struct {
     page: settings_model.Page,
     hovered: Hit = .none,
-    maximized: bool = false,
     current_wallpaper_path: ?[]const u8 = null,
     preferences: settings_model.PreferencesState = .{},
     runtime: settings_model.RuntimeState = .{},
@@ -51,15 +50,9 @@ const nav_items = [_]NavItem{
 };
 
 pub fn hitTest(width: u32, height: u32, x: f64, y: f64, state: State) Hit {
-<<<<<<< HEAD
     if (closeRect(width).contains(x, y)) return .close;
     if (maximizeRect(width).contains(x, y)) return .maximize;
     if (minimizeRect(width).contains(x, y)) return .minimize;
-=======
-    if (closeRect(width, state.maximized).contains(x, y)) return .close;
-    if (maximizeRect(width, state.maximized).contains(x, y)) return .maximize;
-    if (minimizeRect(width, state.maximized).contains(x, y)) return .minimize;
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     if (titlebarDragRect(width, height, state.maximized).contains(x, y)) return .titlebar;
 
     const sidebar = sidebarRect(width, height);
@@ -101,6 +94,8 @@ pub fn hitTest(width: u32, height: u32, x: f64, y: f64, state: State) Hit {
         for (settings_model.dock_icon_size_options, 0..) |option, index| {
             if (dockIconChipRect(width, height, index).contains(x, hit_y)) return .{ .dock_icon_size = option.preset };
         }
+        if (dockAutoHideRect(width, height).contains(x, hit_y)) return .dock_auto_hide;
+        if (dockStrongHoverRect(width, height).contains(x, hit_y)) return .dock_strong_hover;
     }
 
     if (state.page == .workspaces) {
@@ -126,11 +121,7 @@ pub fn draw(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
         .title = "Configurações",
         .accent_glyph = "",
         .title_x = 56,
-<<<<<<< HEAD
         .attached_to_edges = state.maximized,
-=======
-        .maximized = state.maximized,
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
     }, hoveredControl(state.hovered));
     drawTopSettingsIcon(cr);
     drawSidebar(cr, width, height, state.page, state.hovered);
@@ -291,13 +282,13 @@ fn drawPanelPage(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
 fn drawDockPage(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
     const content = contentRect(width, height);
     const accent = settings_model.accentSpec(state.preferences.accent).primary;
-    drawLabel(cr, content.x, content.y + 82, 15, "A dock fica sempre visível. Aqui você ajusta só o tamanho da barra e dos ícones.", 0.85, 0.87, 0.91, c.CAIRO_FONT_WEIGHT_NORMAL);
+    drawLabel(cr, content.x, content.y + 82, 15, "Tamanho, ícones e comportamento da barra inferior.", 0.85, 0.87, 0.91, c.CAIRO_FONT_WEIGHT_NORMAL);
 
     drawInfoCard(
         cr,
         .{ .x = content.x, .y = content.y + 112, .width = content.width, .height = 94 },
         "Glass do shell",
-        "A dock usa o mesmo efeito de vidro da barra superior e permanece fixa na base da tela.",
+        "A dock usa o mesmo efeito de vidro da barra superior e acompanha tamanho e posição em tempo real.",
     );
 
     drawLabel(cr, content.x, content.y + 236, 13, "Tamanho da dock", 0.91, 0.93, 0.95, c.CAIRO_FONT_WEIGHT_BOLD);
@@ -323,6 +314,25 @@ fn drawDockPage(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
             accent,
         );
     }
+
+    drawToggleCard(
+        cr,
+        dockAutoHideRect(width, height),
+        "Ocultar automaticamente",
+        "Esconde a dock e mostra novamente quando o mouse volta para a borda inferior.",
+        state.preferences.dock_auto_hide,
+        state.hovered == .dock_auto_hide,
+        accent,
+    );
+    drawToggleCard(
+        cr,
+        dockStrongHoverRect(width, height),
+        "Hover mais destacado",
+        "Realça mais o item ativo e deixa o feedback do ponteiro mais evidente.",
+        state.preferences.dock_strong_hover,
+        state.hovered == .dock_strong_hover,
+        accent,
+    );
 }
 
 fn drawDisplaysPage(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
@@ -446,11 +456,7 @@ fn contentRect(width: u32, height: u32) Rect {
 }
 
 fn titlebarDragRect(width: u32, height: u32, maximized: bool) Rect {
-<<<<<<< HEAD
     return chrome.titlebarDragRectStyled(width, height, 120, 120, maximized);
-=======
-    return chrome.titlebarDragRectForMode(width, height, 120, 120, maximized);
->>>>>>> 4b191f5 (refactor: migra shell para arquitetura V2 externa)
 }
 
 fn navItemRect(sidebar: Rect, index: usize) Rect {
@@ -547,6 +553,16 @@ fn dockIconChipRect(width: u32, height: u32, index: usize) Rect {
     };
 }
 
+fn dockAutoHideRect(width: u32, height: u32) Rect {
+    const content = pageBodyContentRect(width, height);
+    return .{ .x = content.x, .y = content.y + 392, .width = content.width, .height = toggle_card_height };
+}
+
+fn dockStrongHoverRect(width: u32, height: u32) Rect {
+    const content = pageBodyContentRect(width, height);
+    return .{ .x = content.x, .y = content.y + 486, .width = content.width, .height = toggle_card_height };
+}
+
 fn workspaceWrapRect(width: u32, height: u32) Rect {
     const content = pageBodyContentRect(width, height);
     return .{ .x = content.x, .y = content.y + 220, .width = content.width, .height = toggle_card_height };
@@ -562,16 +578,16 @@ fn startupWorkspaceRect(width: u32, height: u32, index: usize) Rect {
     };
 }
 
-fn maximizeRect(width: u32, maximized: bool) Rect {
-    return chrome.maximizeRectForMode(width, maximized);
+fn minimizeRect(width: u32) Rect {
+    return chrome.minimizeRect(width);
 }
 
-fn closeRect(width: u32, maximized: bool) Rect {
-    return chrome.closeRectForMode(width, maximized);
+fn maximizeRect(width: u32) Rect {
+    return chrome.maximizeRect(width);
 }
 
-fn minimizeRect(width: u32, maximized: bool) Rect {
-    return chrome.minimizeRectForMode(width, maximized);
+fn closeRect(width: u32) Rect {
+    return chrome.closeRect(width);
 }
 
 pub fn scrollViewportRect(width: u32, height: u32) Rect {
@@ -656,7 +672,7 @@ fn pageContentHeight(width: u32, height: u32, state: State) f64 {
         .wallpapers => manualPickerCardRect(width, height).y + manualPickerCardRect(width, height).height + 20,
         .appearance => reduceTransparencyRect(width, height).y + reduceTransparencyRect(width, height).height + 20,
         .panel => panelDateRect(width, height).y + panelDateRect(width, height).height + 20,
-        .dock => dockIconChipRect(width, height, settings_model.dock_icon_size_options.len - 1).y + dockIconChipRect(width, height, settings_model.dock_icon_size_options.len - 1).height + 28,
+        .dock => dockStrongHoverRect(width, height).y + dockStrongHoverRect(width, height).height + 20,
         .displays => blk: {
             if (state.runtime.display_count == 0) {
                 break :blk viewport.y + 240;
@@ -685,7 +701,7 @@ fn pageHeading(page: settings_model.Page) struct { title: []const u8, subtitle: 
         .wallpapers => .{ .title = "Papel de Parede", .subtitle = "Escolha o fundo da sua área de trabalho" },
         .appearance => .{ .title = "Aparência", .subtitle = "Tema, contraste e direção visual do sistema" },
         .panel => .{ .title = "Painel Superior", .subtitle = "Itens, alinhamento e comportamento do topo" },
-        .dock => .{ .title = "Dock", .subtitle = "Tamanho da barra inferior e escala dos ícones" },
+        .dock => .{ .title = "Dock", .subtitle = "Tamanho, ícones e comportamento da barra inferior" },
         .displays => .{ .title = "Monitores", .subtitle = "Saídas, escala e organização de telas" },
         .workspaces => .{ .title = "Áreas de Trabalho", .subtitle = "Fluxo, quantidade e comportamento dos espaços" },
         .network => .{ .title = "Rede", .subtitle = "Wi‑Fi, Ethernet e conectividade do desktop" },
@@ -699,7 +715,7 @@ fn placeholderText(page: settings_model.Page) []const u8 {
     return switch (page) {
         .appearance => "Aqui vamos consolidar tema, contraste e variantes visuais.",
         .panel => "Aqui vamos configurar relógio, launcher e widgets do topo.",
-        .dock => "Aqui vamos controlar o tamanho da dock e dos ícones.",
+        .dock => "Aqui vamos controlar tamanho, ícones e comportamento da dock.",
         .displays => "Aqui vamos ajustar resolução, escala e layout de monitores.",
         .workspaces => "Aqui vamos controlar áreas de trabalho e regras de navegação.",
         .network => "Aqui vamos mostrar redes disponíveis, status e ajustes de conexão.",
