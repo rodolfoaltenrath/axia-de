@@ -58,7 +58,11 @@ pub const Manager = struct {
         box: c.struct_wlr_box,
     ) !void {
         if (self.findRegion(kind, output)) |entry| {
+            const moved = entry.box.x != box.x or entry.box.y != box.y;
             entry.updateBox(box);
+            if (kind == .panel_popup and moved) {
+                entry.dirty = true;
+            }
             entry.setEnabled(true);
             entry.setStyle(style.styleFor(kind, self.quality));
             return;
@@ -173,7 +177,7 @@ pub const Manager = struct {
             entry.style,
         );
         errdefer next_buffer.deinit();
-        if (entry.kind == .dock or entry.kind == .top_bar) {
+        if (entry.kind == .dock or entry.kind == .top_bar or entry.kind == .panel_popup) {
             pipeline.paintOverlay(next_buffer, entry.style);
         }
 
@@ -204,7 +208,7 @@ pub const Manager = struct {
     fn rootFor(self: *const Manager, kind: GlassKind) [*c]c.struct_wlr_scene_tree {
         return switch (kind) {
             .dock => self.dock_root,
-            .top_bar => self.top_root,
+            .top_bar, .panel_popup => self.top_root,
         };
     }
 };

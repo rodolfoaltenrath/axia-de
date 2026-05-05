@@ -2,6 +2,7 @@ const std = @import("std");
 const c = @import("wl.zig").c;
 const notification = @import("notification_model");
 const settings_model = @import("settings_model");
+const popup_style = @import("popup_style.zig");
 
 // Layout visual do centro de notificacoes: ajuste largura, alturas, espacamento e cores neste arquivo.
 
@@ -43,19 +44,8 @@ pub fn drawPopup(
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
 
-    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
-    c.cairo_set_source_rgba(cr, 0, 0, 0, 0);
-    c.cairo_paint(cr);
-    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
-
-    const bounds = Rect{ .x = 0, .y = 0, .width = @floatFromInt(width), .height = @floatFromInt(height) };
-    drawRoundedRect(cr, bounds, 14);
-    c.cairo_set_source_rgba(cr, 0.10, 0.10, 0.11, 0.98);
-    c.cairo_fill_preserve(cr);
+    popup_style.beginPanelPopup(cr, width, height, preferences);
     const accent = settings_model.accentSpec(preferences.accent).primary;
-    c.cairo_set_source_rgba(cr, accent[0], accent[1], accent[2], 0.45);
-    c.cairo_set_line_width(cr, 1);
-    c.cairo_stroke(cr);
 
     drawLabel(cr, 20, 40, 16, "Não Perturbe", 0.95, 0.96, 0.98);
     drawToggle(cr, toggleRect(), state.do_not_disturb, accent);

@@ -3,6 +3,7 @@ const c = @import("wl.zig").c;
 const battery = @import("battery.zig");
 const Rect = @import("render.zig").Rect;
 const settings_model = @import("settings_model");
+const popup_style = @import("popup_style.zig");
 
 pub const popup_width: u32 = 320;
 pub const popup_height: u32 = 200;
@@ -17,19 +18,7 @@ pub fn drawPopup(
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
 
-    c.cairo_set_source_rgba(cr, 0, 0, 0, 0);
-    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
-    c.cairo_paint(cr);
-    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
-
-    drawRoundedRect(cr, .{ .x = 0, .y = 0, .width = @floatFromInt(width), .height = @floatFromInt(height) }, 14);
-    c.cairo_set_source_rgba(cr, 0.10, 0.10, 0.11, 0.985);
-    c.cairo_fill_preserve(cr);
-    const accent = settings_model.accentSpec(preferences.accent).primary;
-    c.cairo_set_source_rgba(cr, accent[0], accent[1], accent[2], 0.36);
-    c.cairo_set_line_width(cr, 1);
-    c.cairo_stroke(cr);
-
+    popup_style.beginPanelPopup(cr, width, height, preferences);
     drawBatteryIcon(cr, .{ .x = 22, .y = 22, .width = 26, .height = 26 }, state, 0.96);
     drawLabel(cr, 58, 40, 18, "Bateria", 0.96, 0.96, 0.97);
 

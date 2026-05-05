@@ -36,6 +36,13 @@ pub const CloseAppCallback = *const fn (?*anyopaque, []const u8) bool;
 pub const ShowPreviewCallback = *const fn (?*anyopaque, []const u8, i32) void;
 pub const HidePreviewCallback = *const fn (?*anyopaque) void;
 pub const UpdateDockGlassCallback = *const fn (?*anyopaque, c.struct_wlr_box, i32) void;
+pub const PanelGlassAnchor = enum {
+    none,
+    center,
+    left,
+    right,
+};
+pub const UpdatePanelGlassCallback = *const fn (?*anyopaque, PanelGlassAnchor, i32, i32, i32, i32, i32) void;
 
 pub const IpcServer = struct {
     allocator: std.mem.Allocator,
@@ -61,6 +68,7 @@ pub const IpcServer = struct {
     show_preview_cb: ?ShowPreviewCallback = null,
     hide_preview_cb: ?HidePreviewCallback = null,
     update_dock_glass_cb: ?UpdateDockGlassCallback = null,
+    update_panel_glass_cb: ?UpdatePanelGlassCallback = null,
 
     pub fn init(allocator: std.mem.Allocator) IpcServer {
         return .{ .allocator = allocator };
@@ -106,6 +114,7 @@ pub const IpcServer = struct {
         show_preview_cb: ShowPreviewCallback,
         hide_preview_cb: HidePreviewCallback,
         update_dock_glass_cb: UpdateDockGlassCallback,
+        update_panel_glass_cb: UpdatePanelGlassCallback,
     ) void {
         self.ctx = ctx;
         self.get_workspace_state_cb = get_workspace_state_cb;
@@ -121,6 +130,7 @@ pub const IpcServer = struct {
         self.show_preview_cb = show_preview_cb;
         self.hide_preview_cb = hide_preview_cb;
         self.update_dock_glass_cb = update_dock_glass_cb;
+        self.update_panel_glass_cb = update_panel_glass_cb;
     }
 
     pub fn deinit(self: *IpcServer) void {
@@ -349,6 +359,51 @@ pub const IpcServer = struct {
             return;
         }
 
+        if (std.mem.startsWith(u8, request, "panel glass ")) {
+            const payload = std.mem.trim(u8, request["panel glass ".len..], " \r\n\t");
+            var parts = std.mem.tokenizeAny(u8, payload, " ");
+            const raw_anchor = parts.next() orelse {
+                _ = std.posix.write(client_fd, "error invalid-panel-glass\n") catch {};
+                return;
+            };
+            const anchor = parsePanelGlassAnchor(raw_anchor) orelse {
+                _ = std.posix.write(client_fd, "error invalid-panel-glass\n") catch {};
+                return;
+            };
+            const raw_top = parts.next() orelse "0";
+            const raw_right = parts.next() orelse "0";
+            const raw_left = parts.next() orelse "0";
+            const raw_width = parts.next() orelse "0";
+            const raw_height = parts.next() orelse "0";
+
+            const top = std.fmt.parseInt(i32, raw_top, 10) catch {
+                _ = std.posix.write(client_fd, "error invalid-panel-glass\n") catch {};
+                return;
+            };
+            const right = std.fmt.parseInt(i32, raw_right, 10) catch {
+                _ = std.posix.write(client_fd, "error invalid-panel-glass\n") catch {};
+                return;
+            };
+            const left = std.fmt.parseInt(i32, raw_left, 10) catch {
+                _ = std.posix.write(client_fd, "error invalid-panel-glass\n") catch {};
+                return;
+            };
+            const width = std.fmt.parseInt(i32, raw_width, 10) catch {
+                _ = std.posix.write(client_fd, "error invalid-panel-glass\n") catch {};
+                return;
+            };
+            const height = std.fmt.parseInt(i32, raw_height, 10) catch {
+                _ = std.posix.write(client_fd, "error invalid-panel-glass\n") catch {};
+                return;
+            };
+
+            if (self.update_panel_glass_cb) |callback| {
+                callback(self.ctx, anchor, top, right, left, width, height);
+            }
+            _ = std.posix.write(client_fd, "ok\n") catch {};
+            return;
+        }
+
         if (std.mem.startsWith(u8, request, "toast show ")) {
             const payload = std.mem.trim(u8, request["toast show ".len..], " \r\n\t");
             var parts = std.mem.tokenizeScalar(u8, payload, ' ');
@@ -409,6 +464,14 @@ pub const IpcServer = struct {
         }
 
         _ = std.posix.write(client_fd, "error unknown-command\n") catch {};
+    }
+
+    fn parsePanelGlassAnchor(raw: []const u8) ?PanelGlassAnchor {
+        if (std.mem.eql(u8, raw, "none")) return .none;
+        if (std.mem.eql(u8, raw, "center")) return .center;
+        if (std.mem.eql(u8, raw, "left")) return .left;
+        if (std.mem.eql(u8, raw, "right")) return .right;
+        return null;
     }
 
     fn writeWorkspaceState(self: *IpcServer, client_fd: std.posix.socket_t) void {

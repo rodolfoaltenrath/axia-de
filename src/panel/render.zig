@@ -7,6 +7,7 @@ const calendar = @import("calendar.zig");
 const network = @import("network.zig");
 const notification_model = @import("notification_model");
 const settings_model = @import("settings_model");
+const popup_style = @import("popup_style.zig");
 
 pub const Rect = struct {
     x: f64,
@@ -174,18 +175,7 @@ pub fn drawCalendarPopup(
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
 
-    c.cairo_set_source_rgba(cr, 0, 0, 0, 0);
-    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
-    c.cairo_paint(cr);
-    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
-
-    drawRoundedRect(cr, .{ .x = 0, .y = 0, .width = @floatFromInt(width), .height = @floatFromInt(height) }, 14);
-    c.cairo_set_source_rgba(cr, 0.10, 0.10, 0.11, 0.98);
-    c.cairo_fill_preserve(cr);
-    const accent = settings_model.accentSpec(preferences.accent).primary;
-    c.cairo_set_source_rgba(cr, accent[0], accent[1], accent[2], 0.45);
-    c.cairo_set_line_width(cr, 1);
-    c.cairo_stroke(cr);
+    popup_style.beginPanelPopup(cr, width, height, preferences);
 
     var long_buf: [64]u8 = undefined;
     const long_date = calendar.longDate(&long_buf, cursor, today.day());

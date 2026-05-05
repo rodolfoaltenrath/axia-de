@@ -3,6 +3,7 @@ const c = @import("wl.zig").c;
 const network = @import("network.zig");
 const Rect = @import("render.zig").Rect;
 const settings_model = @import("settings_model");
+const popup_style = @import("popup_style.zig");
 
 pub const popup_width: u32 = 380;
 pub const popup_height: u32 = 360;
@@ -30,18 +31,8 @@ pub fn drawPopup(
     c.cairo_save(cr);
     defer c.cairo_restore(cr);
 
-    c.cairo_set_source_rgba(cr, 0, 0, 0, 0);
-    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
-    c.cairo_paint(cr);
-    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
-
-    drawRoundedRect(cr, .{ .x = 0, .y = 0, .width = @floatFromInt(width), .height = @floatFromInt(height) }, 14);
-    c.cairo_set_source_rgba(cr, 0.10, 0.10, 0.11, 0.985);
-    c.cairo_fill_preserve(cr);
+    popup_style.beginPanelPopup(cr, width, height, preferences);
     const accent = settings_model.accentSpec(preferences.accent).primary;
-    c.cairo_set_source_rgba(cr, accent[0], accent[1], accent[2], 0.36);
-    c.cairo_set_line_width(cr, 1);
-    c.cairo_stroke(cr);
 
     drawNetworkIcon(cr, .{ .x = 22, .y = 20, .width = 28, .height = 28 }, state, 0.94);
     drawLabel(cr, 60, 39, 18, "Rede", 0.96, 0.96, 0.97);

@@ -720,6 +720,37 @@ pub const App = struct {
         self.toast_popup.destroy();
     }
 
+    fn setPanelPopupGlass(
+        self: *App,
+        anchor: []const u8,
+        top: u32,
+        right: u32,
+        left: u32,
+        width: u32,
+        height: u32,
+    ) void {
+        const socket_path = self.ipc_socket_path orelse return;
+        ipc.updatePanelGlass(
+            self.allocator,
+            socket_path,
+            anchor,
+            @intCast(top),
+            @intCast(right),
+            @intCast(left),
+            @intCast(width),
+            @intCast(height),
+        ) catch |err| {
+            log.err("failed to update panel popup glass: {}", .{err});
+        };
+    }
+
+    fn clearPanelPopupGlass(self: *App) void {
+        const socket_path = self.ipc_socket_path orelse return;
+        ipc.updatePanelGlass(self.allocator, socket_path, "none", 0, 0, 0, 0, 0) catch |err| {
+            log.err("failed to clear panel popup glass: {}", .{err});
+        };
+    }
+
     fn ensureDismissOverlay(self: *App) !void {
         if (self.dismiss_overlay.layer_surface != null) return;
 
@@ -1250,9 +1281,11 @@ pub const App = struct {
                 log.err("failed to create clock popup: {}", .{err});
                 return;
             };
+            self.setPanelPopupGlass("center", panel_popup_top_gap, 0, 0, popup_width, popup_height);
             self.popup.dirty = true;
         } else {
             self.destroyClockPopup();
+            self.clearPanelPopupGlass();
             self.updateDismissOverlay();
         }
     }
@@ -1269,10 +1302,12 @@ pub const App = struct {
                 log.err("failed to create notifications popup: {}", .{err});
                 return;
             };
+            self.setPanelPopupGlass("right", panel_popup_top_gap, 182, 0, notifications_popup.popup_width, notifications_popup.popup_height);
             self.panel.dirty = true;
             self.notifications_popup.dirty = true;
         } else {
             self.destroyNotificationsPopup();
+            self.clearPanelPopupGlass();
             self.panel.dirty = true;
             self.updateDismissOverlay();
         }
@@ -1287,9 +1322,11 @@ pub const App = struct {
                 log.err("failed to create launcher popup: {}", .{err});
                 return;
             };
+            self.setPanelPopupGlass("left", panel_popup_top_gap, 0, 16, launcher.popup_width, launcher.popup_height);
             self.launcher_popup.dirty = true;
         } else {
             self.destroyLauncherPopup();
+            self.clearPanelPopupGlass();
             self.updateDismissOverlay();
         }
     }
@@ -1303,10 +1340,12 @@ pub const App = struct {
                 log.err("failed to create power popup: {}", .{err});
                 return;
             };
+            self.setPanelPopupGlass("right", panel_popup_top_gap, 8, 0, power_popup.popup_width, power_popup.popup_height);
             self.panel.dirty = true;
             self.power_popup.dirty = true;
         } else {
             self.destroyPowerPopup();
+            self.clearPanelPopupGlass();
             self.panel.dirty = true;
             self.updateDismissOverlay();
         }
@@ -1323,10 +1362,12 @@ pub const App = struct {
                 log.err("failed to create battery popup: {}", .{err});
                 return;
             };
+            self.setPanelPopupGlass("right", panel_popup_top_gap, 138, 0, battery_popup.popup_width, battery_popup.popup_height);
             self.panel.dirty = true;
             self.battery_popup.dirty = true;
         } else {
             self.destroyBatteryPopup();
+            self.clearPanelPopupGlass();
             self.panel.dirty = true;
             self.updateDismissOverlay();
         }
@@ -1343,10 +1384,12 @@ pub const App = struct {
                 log.err("failed to create network popup: {}", .{err});
                 return;
             };
+            self.setPanelPopupGlass("right", panel_popup_top_gap, 96, 0, network_popup.popup_width, network_popup.popup_height);
             self.panel.dirty = true;
             self.network_popup.dirty = true;
         } else {
             self.destroyNetworkPopup();
+            self.clearPanelPopupGlass();
             self.panel.dirty = true;
             self.updateDismissOverlay();
         }
@@ -1363,10 +1406,12 @@ pub const App = struct {
                 log.err("failed to create bluetooth popup: {}", .{err});
                 return;
             };
+            self.setPanelPopupGlass("right", panel_popup_top_gap, 54, 0, bluetooth_popup.popup_width, bluetooth_popup.popup_height);
             self.panel.dirty = true;
             self.bluetooth_popup.dirty = true;
         } else {
             self.destroyBluetoothPopup();
+            self.clearPanelPopupGlass();
             self.panel.dirty = true;
             self.updateDismissOverlay();
         }
@@ -1383,10 +1428,12 @@ pub const App = struct {
                 log.err("failed to create audio popup: {}", .{err});
                 return;
             };
+            self.setPanelPopupGlass("right", panel_popup_top_gap, 12, 0, audio_popup.popup_width, audio_popup.popup_height);
             self.panel.dirty = true;
             self.audio_popup.dirty = true;
         } else {
             self.destroyAudioPopup();
+            self.clearPanelPopupGlass();
             self.panel.dirty = true;
             self.updateDismissOverlay();
         }
@@ -1402,9 +1449,11 @@ pub const App = struct {
                 log.err("failed to create workspace popup: {}", .{err});
                 return;
             };
+            self.setPanelPopupGlass("left", panel_popup_top_gap, 0, 16, workspaces.popup_width, workspaces.popup_height);
             self.workspace_popup.dirty = true;
         } else {
             self.destroyWorkspacePopup();
+            self.clearPanelPopupGlass();
             self.updateDismissOverlay();
         }
     }

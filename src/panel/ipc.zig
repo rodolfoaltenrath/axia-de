@@ -66,6 +66,28 @@ pub fn setDoNotDisturb(allocator: std.mem.Allocator, socket_path: []const u8, en
     return parseNotificationState(response);
 }
 
+pub fn updatePanelGlass(
+    allocator: std.mem.Allocator,
+    socket_path: []const u8,
+    anchor: []const u8,
+    top: i32,
+    right: i32,
+    left: i32,
+    width: i32,
+    height: i32,
+) !void {
+    const payload = try std.fmt.allocPrint(
+        allocator,
+        "panel glass {s} {d} {d} {d} {d} {d}\n",
+        .{ anchor, top, right, left, width, height },
+    );
+    defer allocator.free(payload);
+
+    const response = try request(allocator, socket_path, payload);
+    defer allocator.free(response);
+    if (!std.mem.startsWith(u8, std.mem.trim(u8, response, " \r\n\t"), "ok")) return error.InvalidResponse;
+}
+
 fn request(allocator: std.mem.Allocator, socket_path: []const u8, payload: []const u8) ![]u8 {
     const address = try std.net.Address.initUnix(socket_path);
     const fd = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM | std.posix.SOCK.CLOEXEC, 0);

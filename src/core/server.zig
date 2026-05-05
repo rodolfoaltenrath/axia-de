@@ -27,6 +27,16 @@ const toast_model = @import("../toast/model.zig");
 
 const log = std.log.scoped(.axia);
 const shell_supervisor_interval_ms = 1000;
+const PanelGlassAnchor = @import("../ipc/server.zig").PanelGlassAnchor;
+
+const PanelPopupGlass = struct {
+    anchor: PanelGlassAnchor,
+    top: i32,
+    right: i32,
+    left: i32,
+    width: i32,
+    height: i32,
+};
 
 const ScreenshotTask = struct {
     active_flag: *std.atomic.Value(bool),
@@ -75,6 +85,7 @@ pub const Server = struct {
     screenshot_task_active: *std.atomic.Value(bool),
     dock_glass_surface_box: ?c.struct_wlr_box = null,
     dock_surface_height: i32 = 0,
+    panel_popup_glass: ?PanelPopupGlass = null,
 
     pub fn init(allocator: std.mem.Allocator) !Server {
         c.wlr_log_init(c.WLR_ERROR, null);
@@ -275,6 +286,7 @@ pub const Server = struct {
             ipcShowPreview,
             ipcHidePreview,
             ipcUpdateDockGlass,
+            ipcUpdatePanelGlass,
         );
         self.desktop_menu.setActionCallback(self, handleDesktopAction);
         self.settings.setApplyWallpaperCallback(self, handleApplyWallpaper);
@@ -578,6 +590,42 @@ pub const Server = struct {
         } else {
             self.glass.removeRegion(.dock, output);
         }
+
+        if (self.panel_popup_glass) |popup| {
+            const absolute = self.panelPopupGlassBox(full_area, usable_area.y, popup);
+            if (absolute.width > 0 and absolute.height > 0) {
+                self.glass.registerRegion(.panel_popup, output, absolute) catch {};
+                self.glass.refreshOutput(output, self.wallpaper) catch |err| {
+                    log.err("failed to refresh panel popup glass region: {}", .{err});
+                };
+            } else {
+                self.glass.removeRegion(.panel_popup, output);
+            }
+        } else {
+            self.glass.removeRegion(.panel_popup, output);
+        }
+    }
+
+    fn panelPopupGlassBox(self: *const Server, full_area: c.struct_wlr_box, top_base: i32, popup: PanelPopupGlass) c.struct_wlr_box {
+        _ = self;
+        const width = @min(@max(popup.width, 0), full_area.width);
+        const height = @min(@max(popup.height, 0), full_area.height);
+        if (width <= 0 or height <= 0) return .{ .x = 0, .y = 0, .width = 0, .height = 0 };
+
+        const x = switch (popup.anchor) {
+            .none => return .{ .x = 0, .y = 0, .width = 0, .height = 0 },
+            .center => full_area.x + @divTrunc(full_area.width - width, 2),
+            .left => full_area.x + popup.left,
+            .right => full_area.x + full_area.width - popup.right - width,
+        };
+        const y = top_base + popup.top;
+
+        return .{
+            .x = std.math.clamp(x, full_area.x, full_area.x + full_area.width - width),
+            .y = std.math.clamp(y, full_area.y, full_area.y + full_area.height - height),
+            .width = width,
+            .height = height,
+        };
     }
 
     fn ipcUpdateDockGlass(ctx: ?*anyopaque, surface_box: c.struct_wlr_box, surface_height: i32) void {
@@ -593,6 +641,33 @@ pub const Server = struct {
         server.dock_glass_surface_box = surface_box;
         server.dock_surface_height = surface_height;
         server.updateShellUsableArea();
+        server.syncGlassRegions();
+    }
+
+    fn ipcUpdatePanelGlass(
+        ctx: ?*anyopaque,
+        anchor: PanelGlassAnchor,
+        top: i32,
+        right: i32,
+        left: i32,
+        width: i32,
+        height: i32,
+    ) void {
+        const raw_server = ctx orelse return;
+        const server: *Server = @ptrCast(@alignCast(raw_server));
+        if (anchor == .none or width <= 0 or height <= 0) {
+            server.panel_popup_glass = null;
+            server.syncGlassRegions();
+            return;
+        }
+        server.panel_popup_glass = .{
+            .anchor = anchor,
+            .top = top,
+            .right = right,
+            .left = left,
+            .width = width,
+            .height = height,
+        };
         server.syncGlassRegions();
     }
 

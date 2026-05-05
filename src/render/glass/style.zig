@@ -1,6 +1,7 @@
 pub const GlassKind = enum {
     top_bar,
     dock,
+    panel_popup,
 };
 
 pub const GlassQuality = enum {
@@ -23,6 +24,7 @@ pub fn styleFor(kind: GlassKind, quality: GlassQuality) GlassStyle {
     return switch (kind) {
         .top_bar => topBarStyle(quality),
         .dock => dockStyle(quality),
+        .panel_popup => panelPopupStyle(quality),
     };
 }
 
@@ -85,6 +87,38 @@ fn dockStyle(quality: GlassQuality) GlassStyle {
             .tint_rgba = .{ 0.36, 0.54, 0.90, 0.26 },
             .border_rgba = .{ 0.82, 0.94, 1.0, 0.32 },
             .highlight_rgba = .{ 0.86, 0.96, 1.0, 0.15 },
+            .noise_opacity = 0.035,
+        },
+    };
+}
+
+fn panelPopupStyle(quality: GlassQuality) GlassStyle {
+    return switch (quality) {
+        .low => .{
+            .downsample_factor = 8,
+            .blur_radius = 12,
+            .corner_radius = 18,
+            .tint_rgba = .{ 0.34, 0.48, 0.78, 0.34 },
+            .border_rgba = .{ 0.82, 0.94, 1.0, 0.30 },
+            .highlight_rgba = .{ 0.88, 0.97, 1.0, 0.13 },
+            .noise_opacity = 0.025,
+        },
+        .balanced => .{
+            .downsample_factor = 4,
+            .blur_radius = 18,
+            .corner_radius = 18,
+            .tint_rgba = .{ 0.36, 0.52, 0.86, 0.32 },
+            .border_rgba = .{ 0.84, 0.95, 1.0, 0.32 },
+            .highlight_rgba = .{ 0.90, 0.98, 1.0, 0.15 },
+            .noise_opacity = 0.03,
+        },
+        .high => .{
+            .downsample_factor = 2,
+            .blur_radius = 22,
+            .corner_radius = 18,
+            .tint_rgba = .{ 0.38, 0.55, 0.90, 0.30 },
+            .border_rgba = .{ 0.86, 0.96, 1.0, 0.34 },
+            .highlight_rgba = .{ 0.92, 0.98, 1.0, 0.16 },
             .noise_opacity = 0.035,
         },
     };
