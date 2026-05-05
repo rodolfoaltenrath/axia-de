@@ -416,7 +416,9 @@ pub const App = struct {
     }
 
     fn handleGlobalRemove(_: ?*anyopaque, _: ?*c.struct_wl_registry, _: u32) callconv(.c) void {}
-    fn handlePing(_: ?*anyopaque, wm_base: ?*c.struct_xdg_wm_base, serial: u32) callconv(.c) void { c.xdg_wm_base_pong(wm_base, serial); }
+    fn handlePing(_: ?*anyopaque, wm_base: ?*c.struct_xdg_wm_base, serial: u32) callconv(.c) void {
+        c.xdg_wm_base_pong(wm_base, serial);
+    }
 
     fn handleXdgConfigure(data: ?*anyopaque, xdg_surface: ?*c.struct_xdg_surface, serial: u32) callconv(.c) void {
         const raw_app = data orelse return;

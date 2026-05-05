@@ -112,6 +112,7 @@ fn parseOpenApps(response: []const u8) !OpenAppsState {
         _ = tokens.next() orelse continue;
         const raw_focused = tokens.next() orelse continue;
         const id = tokens.next() orelse continue;
+        if (isHiddenFromDock(id)) continue;
         const title = tokens.rest();
 
         var app = &state.apps[state.count];
@@ -122,6 +123,10 @@ fn parseOpenApps(response: []const u8) !OpenAppsState {
     }
 
     return state;
+}
+
+fn isHiddenFromDock(app_id: []const u8) bool {
+    return std.mem.eql(u8, app_id, "axia-launcher");
 }
 
 fn copyText(dest: []u8, src: []const u8) usize {

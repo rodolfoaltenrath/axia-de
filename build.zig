@@ -220,6 +220,7 @@ pub fn build(b: *std.Build) void {
     dock_exe.root_module.addImport("runtime_catalog", runtime_catalog_module);
     dock_exe.root_module.addImport("launcher_state", launcher_state_module);
     dock_exe.root_module.addImport("axia_prefs", prefs_module);
+    dock_exe.root_module.addImport("axia_assets", assets_module);
     dock_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     dock_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     dock_exe.step.dependOn(&gen_layer_shell_client_header.step);
@@ -280,6 +281,7 @@ pub fn build(b: *std.Build) void {
     app_grid_exe.root_module.addImport("client_wl", client_wl_module);
     app_grid_exe.root_module.addImport("client_buffer", client_buffer_module);
     app_grid_exe.root_module.addImport("client_chrome", client_chrome_module);
+    app_grid_exe.root_module.addImport("axia_assets", assets_module);
     app_grid_exe.step.dependOn(&gen_xdg_shell_client_header.step);
     app_grid_exe.step.dependOn(&gen_xdg_shell_client_code.step);
     app_grid_exe.addIncludePath(.{ .cwd_relative = "/usr/include" });

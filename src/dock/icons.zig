@@ -1,4 +1,5 @@
 const std = @import("std");
+const assets = @import("axia_assets");
 const c = @import("wl.zig").c;
 const runtime_catalog = @import("runtime_catalog");
 
@@ -74,12 +75,19 @@ pub const IconCache = struct {
 };
 
 fn loadSurfaceForEntry(allocator: std.mem.Allocator, entry: runtime_catalog.AppEntry) !?*c.cairo_surface_t {
-    var storage: [6][]const u8 = undefined;
+    var storage: [8][]const u8 = undefined;
     var candidate_count: usize = 0;
 
-    if (entry.icon.len > 0) {
-        storage[candidate_count] = entry.icon;
+    if (preferredAxiaIcon(entry)) |icon| {
+        storage[candidate_count] = icon;
         candidate_count += 1;
+    }
+
+    if (entry.icon.len > 0) {
+        if (!containsIgnoreCaseInArray(storage[0..candidate_count], entry.icon)) {
+            storage[candidate_count] = entry.icon;
+            candidate_count += 1;
+        }
     }
 
     const command_name = executableToken(entry.command);
@@ -123,6 +131,8 @@ fn resolveThemedIconPath(allocator: std.mem.Allocator, icon_name: []const u8) !?
     const file_name = try std.fmt.allocPrint(allocator, "{s}.png", .{icon_name});
     defer allocator.free(file_name);
 
+    if (try resolveAxiaAppIconPath(allocator, icon_name)) |path| return path;
+
     for (pixmap_roots) |root| {
         if (try joinIfExists(allocator, &.{ root, file_name })) |path| return path;
     }
@@ -138,6 +148,16 @@ fn resolveThemedIconPath(allocator: std.mem.Allocator, icon_name: []const u8) !?
     }
 
     return null;
+}
+
+fn resolveAxiaAppIconPath(allocator: std.mem.Allocator, icon_name: []const u8) !?[]u8 {
+    const asset_path = try std.fmt.allocPrint(allocator, "assets/icons/apps/{s}.png", .{icon_name});
+    defer allocator.free(asset_path);
+
+    return assets.resolvePath(allocator, asset_path) catch |err| switch (err) {
+        error.AssetNotFound => null,
+        else => err,
+    };
 }
 
 fn joinIfExists(allocator: std.mem.Allocator, parts: []const []const u8) !?[]u8 {
@@ -206,19 +226,19 @@ fn executableToken(command: []const u8) []const u8 {
 
 fn iconAliases(entry: runtime_catalog.AppEntry) []const []const u8 {
     if (std.ascii.eqlIgnoreCase(entry.label, "Terminal")) {
-        return &.{ "Alacritty", "alacritty", "utilities-terminal" };
+        return &.{ "terminal", "Alacritty", "alacritty", "utilities-terminal" };
     }
     if (std.ascii.eqlIgnoreCase(entry.label, "Firefox")) {
         return &.{ "firefox", "web-browser" };
     }
     if (std.ascii.eqlIgnoreCase(entry.label, "Arquivos")) {
-        return &.{ "folder", "folder-open" };
+        return &.{ "axia-files", "folder", "folder-open" };
     }
     if (std.ascii.eqlIgnoreCase(entry.label, "VS Code")) {
-        return &.{ "visual-studio-code", "code" };
+        return &.{ "vscode", "visual-studio-code", "code" };
     }
     if (std.ascii.eqlIgnoreCase(entry.label, "Configurações")) {
-        return &.{ "preferences-system", "preferences-desktop" };
+        return &.{ "settings-axia", "preferences-system", "preferences-desktop" };
     }
     if (std.ascii.eqlIgnoreCase(entry.label, "Rede")) {
         return &.{ "preferences-system-network", "network-workgroup" };
@@ -230,6 +250,18 @@ fn iconAliases(entry: runtime_catalog.AppEntry) []const []const u8 {
         return &.{ "printer", "printer-network" };
     }
     return &.{};
+}
+
+fn preferredAxiaIcon(entry: runtime_catalog.AppEntry) ?[]const u8 {
+    if (std.ascii.eqlIgnoreCase(entry.id, "default-browser")) {
+        const command_name = executableToken(entry.command);
+        if (command_name.len > 0 and !std.mem.eql(u8, command_name, "xdg-open")) return command_name;
+    }
+    if (std.ascii.eqlIgnoreCase(entry.id, "terminal") or std.ascii.eqlIgnoreCase(entry.label, "Terminal")) return "terminal";
+    if (std.ascii.eqlIgnoreCase(entry.id, "axia-files") or std.ascii.eqlIgnoreCase(entry.label, "Arquivos")) return "axia-files";
+    if (std.ascii.eqlIgnoreCase(entry.id, "axia-settings") or std.ascii.eqlIgnoreCase(entry.label, "Configurações")) return "settings-axia";
+    if (std.ascii.eqlIgnoreCase(entry.id, "code") or std.ascii.eqlIgnoreCase(entry.label, "VS Code")) return "vscode";
+    return null;
 }
 
 fn toCString(buffer: []u8, text: []const u8) [:0]u8 {

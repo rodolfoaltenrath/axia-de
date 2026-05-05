@@ -3,10 +3,13 @@ const static_catalog = @import("apps_catalog");
 
 pub const AppEntry = static_catalog.AppEntry;
 
+const default_browser_id = "default-browser";
+
 pub const Catalog = struct {
     allocator: std.mem.Allocator,
     entries: std.ArrayListUnmanaged(AppEntry) = .empty,
     owned_strings: std.ArrayListUnmanaged([]u8) = .empty,
+    default_browser_desktop_id: []const u8 = "",
 
     pub fn init(allocator: std.mem.Allocator) Catalog {
         return .{ .allocator = allocator };
@@ -21,6 +24,7 @@ pub const Catalog = struct {
     pub fn loadDefault(self: *Catalog) !void {
         try self.appendStaticFallbacks();
         try self.loadDesktopDirectories();
+        try self.applyDefaultBrowserMetadata();
     }
 
     pub fn favoriteEntries(self: *const Catalog, allocator: std.mem.Allocator) !std.ArrayListUnmanaged(AppEntry) {
@@ -42,6 +46,10 @@ pub const Catalog = struct {
     }
 
     pub fn findByRuntimeApp(self: *const Catalog, app_id: []const u8, title: []const u8) ?AppEntry {
+        if (self.isDefaultBrowserRuntime(app_id)) {
+            if (self.findById(default_browser_id)) |entry| return entry;
+        }
+
         if (self.findById(app_id)) |entry| return entry;
 
         if (std.mem.endsWith(u8, app_id, ".desktop")) {
@@ -58,10 +66,100 @@ pub const Catalog = struct {
         return null;
     }
 
+    fn findByIdMutable(self: *Catalog, id: []const u8) ?*AppEntry {
+        for (self.entries.items) |*entry| {
+            if (std.mem.eql(u8, entry.id, id)) return entry;
+        }
+        return null;
+    }
+
     fn appendStaticFallbacks(self: *Catalog) !void {
         for (static_catalog.entries) |entry| {
             try self.entries.append(self.allocator, entry);
         }
+    }
+
+    fn applyDefaultBrowserMetadata(self: *Catalog) !void {
+        const default_desktop_id = try self.queryDefaultBrowserDesktopId() orelse return;
+        defer self.allocator.free(default_desktop_id);
+
+        const browser_entry = self.findById(default_desktop_id) orelse return;
+        const default_entry = self.findByIdMutable(default_browser_id) orelse return;
+
+        self.default_browser_desktop_id = try self.ownText(default_desktop_id);
+        default_entry.command = try self.defaultBrowserLaunchCommand(browser_entry.command);
+        default_entry.icon = browser_entry.icon;
+        default_entry.accent = browser_entry.accent;
+
+        const subtitle = try std.fmt.allocPrint(
+            self.allocator,
+            "Navegador padrão: {s}",
+            .{browser_entry.label},
+        );
+        errdefer self.allocator.free(subtitle);
+        try self.owned_strings.append(self.allocator, subtitle);
+        default_entry.subtitle = subtitle;
+
+        const keywords = try std.fmt.allocPrint(
+            self.allocator,
+            "browser navegador internet web default padrão {s} {s}",
+            .{ browser_entry.label, default_desktop_id },
+        );
+        errdefer self.allocator.free(keywords);
+        try self.owned_strings.append(self.allocator, keywords);
+        default_entry.keywords = keywords;
+    }
+
+    fn queryDefaultBrowserDesktopId(self: *Catalog) !?[]u8 {
+        const result = std.process.Child.run(.{
+            .allocator = self.allocator,
+            .argv = &.{ "xdg-settings", "get", "default-web-browser" },
+            .max_output_bytes = 4 * 1024,
+        }) catch return null;
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+
+        switch (result.term) {
+            .Exited => |code| if (code != 0) return null,
+            else => return null,
+        }
+
+        const trimmed = std.mem.trim(u8, result.stdout, " \r\n\t");
+        if (trimmed.len == 0) return null;
+        return try self.allocator.dupe(u8, normalizeDesktopId(trimmed));
+    }
+
+    fn defaultBrowserLaunchCommand(self: *Catalog, command: []const u8) ![]const u8 {
+        const browser_exec = executableToken(command);
+        if (browser_exec.len == 0) return self.ownText(command);
+
+        const base = std.fs.path.basename(browser_exec);
+        if (isChromiumFamilyBrowser(base)) {
+            return self.ownFormatted(
+                "{s} --user-data-dir=\"${{XDG_RUNTIME_DIR:-/tmp}}/axia-de-{s}\" --password-store=basic --no-first-run --new-window about:blank",
+                .{ browser_exec, profileNameForBrowser(base) },
+            );
+        }
+
+        if (std.ascii.eqlIgnoreCase(base, "firefox")) {
+            return self.ownFormatted(
+                "{s} --new-instance --profile \"${{XDG_RUNTIME_DIR:-/tmp}}/axia-de-firefox\" about:blank",
+                .{browser_exec},
+            );
+        }
+
+        return self.ownText(command);
+    }
+
+    fn isDefaultBrowserRuntime(self: *const Catalog, app_id: []const u8) bool {
+        if (self.default_browser_desktop_id.len == 0 or app_id.len == 0) return false;
+
+        const normalized_app_id = normalizeDesktopId(app_id);
+        if (std.ascii.eqlIgnoreCase(normalized_app_id, self.default_browser_desktop_id)) return true;
+
+        const browser_entry = self.findById(self.default_browser_desktop_id) orelse return false;
+        const browser_exec = execBasename(browser_entry.command);
+        return browser_exec.len > 0 and std.ascii.eqlIgnoreCase(browser_exec, normalized_app_id);
     }
 
     fn loadDesktopDirectories(self: *Catalog) !void {
@@ -149,6 +247,13 @@ pub const Catalog = struct {
         const copy = try self.allocator.dupe(u8, text);
         try self.owned_strings.append(self.allocator, copy);
         return copy;
+    }
+
+    fn ownFormatted(self: *Catalog, comptime fmt: []const u8, args: anytype) ![]u8 {
+        const text = try std.fmt.allocPrint(self.allocator, fmt, args);
+        errdefer self.allocator.free(text);
+        try self.owned_strings.append(self.allocator, text);
+        return text;
     }
 
     fn ownSearchKeywords(self: *Catalog, keywords: []const u8, desktop_id: []const u8) ![]u8 {
@@ -264,6 +369,10 @@ fn parseBool(value: []const u8) bool {
 
 fn desktopIdFromPath(path: []const u8) []const u8 {
     const base = std.fs.path.basename(path);
+    return normalizeDesktopId(base);
+}
+
+fn normalizeDesktopId(base: []const u8) []const u8 {
     if (std.mem.endsWith(u8, base, ".desktop")) {
         return base[0 .. base.len - ".desktop".len];
     }
@@ -324,6 +433,36 @@ fn executableToken(command: []const u8) []const u8 {
         return trimmed;
     }
     return "";
+}
+
+fn isChromiumFamilyBrowser(executable: []const u8) bool {
+    const chromium_names = [_][]const u8{
+        "brave",
+        "brave-browser",
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "google-chrome-stable",
+        "microsoft-edge",
+        "microsoft-edge-stable",
+        "vivaldi",
+        "opera",
+    };
+
+    for (chromium_names) |name| {
+        if (std.ascii.eqlIgnoreCase(executable, name)) return true;
+    }
+    return false;
+}
+
+fn profileNameForBrowser(executable: []const u8) []const u8 {
+    if (std.mem.indexOf(u8, executable, "brave") != null) return "brave";
+    if (std.mem.indexOf(u8, executable, "chrom") != null) return "chromium";
+    if (std.mem.indexOf(u8, executable, "chrome") != null) return "chrome";
+    if (std.mem.indexOf(u8, executable, "edge") != null) return "edge";
+    if (std.mem.indexOf(u8, executable, "vivaldi") != null) return "vivaldi";
+    if (std.mem.indexOf(u8, executable, "opera") != null) return "opera";
+    return "browser";
 }
 
 fn monogramForLabel(label: []const u8) []const u8 {

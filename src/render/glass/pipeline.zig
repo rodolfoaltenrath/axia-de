@@ -28,6 +28,63 @@ pub fn renderBackdrop(
     return buffer;
 }
 
+pub fn paintOverlay(buffer: *CairoBuffer, style: GlassStyle) void {
+    c.cairo_save(buffer.cr);
+    defer c.cairo_restore(buffer.cr);
+
+    applyClip(buffer.cr, buffer.width, buffer.height, style.corner_radius);
+
+    c.cairo_set_source_rgba(
+        buffer.cr,
+        @as(f64, @floatCast(style.tint_rgba[0])),
+        @as(f64, @floatCast(style.tint_rgba[1])),
+        @as(f64, @floatCast(style.tint_rgba[2])),
+        @as(f64, @floatCast(style.tint_rgba[3])),
+    );
+    c.cairo_paint(buffer.cr);
+
+    const height = @as(f64, @floatFromInt(buffer.height));
+    const width = @as(f64, @floatFromInt(buffer.width));
+    const highlight = c.cairo_pattern_create_linear(0, 0, 0, height);
+    defer c.cairo_pattern_destroy(highlight);
+    c.cairo_pattern_add_color_stop_rgba(
+        highlight,
+        0.0,
+        @as(f64, @floatCast(style.highlight_rgba[0])),
+        @as(f64, @floatCast(style.highlight_rgba[1])),
+        @as(f64, @floatCast(style.highlight_rgba[2])),
+        @as(f64, @floatCast(style.highlight_rgba[3])),
+    );
+    c.cairo_pattern_add_color_stop_rgba(
+        highlight,
+        0.58,
+        @as(f64, @floatCast(style.highlight_rgba[0])),
+        @as(f64, @floatCast(style.highlight_rgba[1])),
+        @as(f64, @floatCast(style.highlight_rgba[2])),
+        0.0,
+    );
+    c.cairo_rectangle(buffer.cr, 0, 0, width, height);
+    c.cairo_set_source(buffer.cr, highlight);
+    c.cairo_fill(buffer.cr);
+
+    const radius = @min(@as(f64, @floatCast(style.corner_radius)), @min(width, height) / 2.0);
+    if (radius > 0.0) {
+        roundedRect(buffer.cr, 0.5, 0.5, @max(width - 1.0, 1.0), @max(height - 1.0, 1.0), radius);
+    } else {
+        c.cairo_rectangle(buffer.cr, 0.5, 0.5, @max(width - 1.0, 1.0), @max(height - 1.0, 1.0));
+    }
+    c.cairo_set_source_rgba(
+        buffer.cr,
+        @as(f64, @floatCast(style.border_rgba[0])),
+        @as(f64, @floatCast(style.border_rgba[1])),
+        @as(f64, @floatCast(style.border_rgba[2])),
+        @as(f64, @floatCast(style.border_rgba[3])),
+    );
+    c.cairo_set_line_width(buffer.cr, 1.0);
+    c.cairo_stroke(buffer.cr);
+    c.cairo_surface_flush(buffer.surface);
+}
+
 fn applyClip(cr: *c.cairo_t, width: u32, height: u32, radius: f32) void {
     const r = @min(
         @as(f64, radius),

@@ -426,6 +426,10 @@ fn drawTitlebar(cr: *c.cairo_t, width: u32, height: u32, snapshot: *const browse
         .title = "",
         .title_x = 0,
         .attached_to_edges = maximized,
+        .attached_shadow_clip_bottom = if (maximized)
+            @as(f64, @floatFromInt(height)) - chrome.attached_bottom_shadow
+        else
+            null,
     }, hoveredControl(hovered));
     drawFilesMenuBar(cr, width, height, hovered, sidebar_collapsed, maximized);
 }

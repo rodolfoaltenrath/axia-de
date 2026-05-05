@@ -15,12 +15,25 @@ const Position = struct {
     y: i32,
 };
 
+const Size = struct {
+    width: i32,
+    height: i32,
+};
+
+const SpecialSurfaceKind = enum {
+    launcher,
+    app_grid,
+    settings,
+    files,
+};
+
 pub const XdgManager = struct {
     allocator: std.mem.Allocator,
     seat: [*c]c.struct_wlr_seat,
     output_layout: [*c]c.struct_wlr_output_layout,
     primary_output: ?[*c]c.struct_wlr_output = null,
     usable_area: c.struct_wlr_box = std.mem.zeroes(c.struct_wlr_box),
+    window_shadow_root: [*c]c.struct_wlr_scene_tree,
     window_root: [*c]c.struct_wlr_scene_tree,
     overlay_root: [*c]c.struct_wlr_scene_tree,
     shell: [*c]c.struct_wlr_xdg_shell,
@@ -45,6 +58,7 @@ pub const XdgManager = struct {
         allocator: std.mem.Allocator,
         seat: [*c]c.struct_wlr_seat,
         output_layout: [*c]c.struct_wlr_output_layout,
+        window_shadow_root: [*c]c.struct_wlr_scene_tree,
         window_root: [*c]c.struct_wlr_scene_tree,
         overlay_root: [*c]c.struct_wlr_scene_tree,
         display: *c.struct_wl_display,
@@ -56,6 +70,7 @@ pub const XdgManager = struct {
             .allocator = allocator,
             .seat = seat,
             .output_layout = output_layout,
+            .window_shadow_root = window_shadow_root,
             .window_root = window_root,
             .overlay_root = overlay_root,
             .shell = shell,
@@ -81,6 +96,7 @@ pub const XdgManager = struct {
 
         for (self.views.items) |view| {
             view.setUsableArea(usable_area);
+            self.syncSpecialSurfaceGeometry(view);
         }
     }
 
@@ -221,6 +237,10 @@ pub const XdgManager = struct {
             self.hideAppPreview();
             return;
         };
+        const capture_box = view.captureBox() orelse {
+            self.hideAppPreview();
+            return;
+        };
 
         self.hideAppPreview();
 
@@ -228,8 +248,8 @@ pub const XdgManager = struct {
         const preview_max_height: i32 = 168;
         const preview_padding: i32 = 8;
         const preview_gap: i32 = 12;
-        const width = @max(view.effectiveWidth(), 1);
-        const height = @max(view.effectiveHeight(), 1);
+        const width = @max(capture_box.width, 1);
+        const height = @max(capture_box.height, 1);
         const scale = @min(
             1.0,
             @min(
@@ -249,22 +269,17 @@ pub const XdgManager = struct {
         errdefer frame_buffer.deinit();
         _ = c.wlr_scene_buffer_create(tree, frame_buffer.wlrBuffer()) orelse return error.PreviewRectCreateFailed;
 
-        if (view.workspaceIndex() == self.workspaces.current and !view.isMinimized()) {
-            const content_tree = c.wlr_scene_subsurface_tree_create(tree, view.xdg_surface.*.surface) orelse return error.PreviewSurfaceCreateFailed;
-            c.wlr_scene_node_set_position(&content_tree.*.node, preview_padding, preview_padding);
-
-            var clip = c.struct_wlr_box{
-                .x = 0,
-                .y = 0,
-                .width = width,
-                .height = height,
-            };
-            c.wlr_scene_subsurface_tree_set_clip(&content_tree.*.node, &clip);
-            scaleSceneTree(content_tree, scale);
-        } else {
-            const content_tree = c.wlr_scene_tree_create(tree) orelse return error.PreviewSurfaceCreateFailed;
-            try self.snapshotPreviewBuffers(content_tree, view, scale, preview_padding);
-        }
+        const content_tree = c.wlr_scene_tree_create(tree) orelse return error.PreviewSurfaceCreateFailed;
+        try self.snapshotPreviewBuffers(
+            content_tree,
+            view,
+            scale,
+            preview_padding,
+            capture_box.x,
+            capture_box.y,
+            capture_box.width,
+            capture_box.height,
+        );
 
         const margin: i32 = 16;
         const output_area = self.outputArea();
@@ -321,13 +336,16 @@ pub const XdgManager = struct {
     }
 
     fn registerView(self: *XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) !void {
-        const initial_position = self.initialPositionForToplevel(toplevel);
+        const initial_kind = self.specialSurfaceKindForToplevel(toplevel);
+        const initial_size = self.initialSizeForToplevel(toplevel);
+        const initial_position = self.initialPositionForToplevel(toplevel, initial_kind, initial_size);
         const view = try View.create(
             self.allocator,
             self.seat,
             self.output_layout,
             self.primary_output orelse return error.PrimaryOutputMissing,
             self.usable_area,
+            self.window_shadow_root,
             self.window_root,
             toplevel,
             toplevel.*.base,
@@ -342,10 +360,10 @@ pub const XdgManager = struct {
         );
         errdefer self.allocator.destroy(view);
 
-        if (self.isLauncherToplevel(toplevel) or self.isAppGridToplevel(toplevel)) {
-            view.restore_width = 760;
-            view.restore_height = 432;
-            const centered = self.initialPositionForSpecialSurface(toplevel);
+        view.restore_width = initial_size.width;
+        view.restore_height = initial_size.height;
+        if (initial_kind != null) {
+            const centered = self.initialPositionForSpecialSurface(initial_size);
             view.setPosition(centered.x, centered.y);
         }
 
@@ -363,22 +381,92 @@ pub const XdgManager = struct {
         if (self.next_y > max_y) self.next_y = base_y;
     }
 
-    fn initialPositionForToplevel(self: *XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) Position {
-        if (self.isLauncherToplevel(toplevel) or self.isAppGridToplevel(toplevel)) {
-            return self.initialPositionForSpecialSurface(toplevel);
+    fn initialPositionForToplevel(self: *XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel, kind: ?SpecialSurfaceKind, size: Size) Position {
+        _ = toplevel;
+        if (kind != null) {
+            return self.initialPositionForSpecialSurface(size);
         }
 
         return .{ .x = self.next_x, .y = self.next_y };
     }
 
-    fn initialPositionForSpecialSurface(self: *const XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) Position {
-        const special_width: i32 = if (self.isAppGridToplevel(toplevel)) 1280 else 760;
-        const special_height: i32 = if (self.isAppGridToplevel(toplevel)) 820 else 432;
-        const output_area = self.outputArea();
+    fn initialPositionForSpecialSurface(self: *const XdgManager, size: Size) Position {
+        const output_area = self.specialSurfaceArea();
         return .{
-            .x = output_area.x + @divTrunc(output_area.width - special_width, 2),
-            .y = output_area.y + @divTrunc(output_area.height - special_height, 2),
+            .x = output_area.x + @divTrunc(output_area.width - size.width, 2),
+            .y = output_area.y + @divTrunc(output_area.height - size.height, 2),
         };
+    }
+
+    fn syncSpecialSurfaceGeometry(self: *const XdgManager, view: *View) void {
+        const kind = specialSurfaceKindForView(view) orelse return;
+        if (view.toplevel.*.current.maximized or view.toplevel.*.requested.maximized) return;
+        if (view.toplevel.*.current.fullscreen or view.toplevel.*.requested.fullscreen) return;
+
+        const size = self.specialSurfaceSize(kind);
+        view.setSize(size.width, size.height);
+        const area = self.specialSurfaceArea();
+        view.setPosition(
+            area.x + @divTrunc(area.width - size.width, 2),
+            area.y + @divTrunc(area.height - size.height, 2),
+        );
+    }
+
+    fn specialSurfaceKindForToplevel(self: *const XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) ?SpecialSurfaceKind {
+        if (self.isAppGridToplevel(toplevel)) return .app_grid;
+        if (self.isLauncherToplevel(toplevel)) return .launcher;
+        if (self.isSettingsToplevel(toplevel)) return .settings;
+        if (self.isFilesToplevel(toplevel)) return .files;
+        return null;
+    }
+
+    fn specialSurfaceKindForView(view: *const View) ?SpecialSurfaceKind {
+        if (view.isAppGrid()) return .app_grid;
+        if (view.isLauncher()) return .launcher;
+        const app_id = view.appId();
+        if (std.mem.eql(u8, app_id, "axia-settings")) return .settings;
+        if (std.mem.eql(u8, app_id, "axia-files")) return .files;
+        return null;
+    }
+
+    fn initialSizeForToplevel(self: *const XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) Size {
+        if (self.specialSurfaceKindForToplevel(toplevel)) |kind| return self.specialSurfaceSize(kind);
+        return self.responsiveDefaultWindowSize();
+    }
+
+    fn specialSurfaceSize(self: *const XdgManager, kind: SpecialSurfaceKind) Size {
+        return switch (kind) {
+            .launcher => self.responsiveAreaFraction(.{ .width = 56, .height = 48 }, .{ .width = 360, .height = 260 }, .{ .width = 48, .height = 48 }),
+            .app_grid => self.responsiveAreaFraction(.{ .width = 84, .height = 82 }, .{ .width = 420, .height = 360 }, .{ .width = 72, .height = 60 }),
+            .settings => self.responsiveAreaFraction(.{ .width = 76, .height = 82 }, .{ .width = 640, .height = 460 }, .{ .width = 64, .height = 64 }),
+            .files => self.responsiveAreaFraction(.{ .width = 70, .height = 72 }, .{ .width = 620, .height = 420 }, .{ .width = 64, .height = 64 }),
+        };
+    }
+
+    fn responsiveDefaultWindowSize(self: *const XdgManager) Size {
+        return self.responsiveAreaFraction(.{ .width = 64, .height = 62 }, .{ .width = 520, .height = 360 }, .{ .width = 96, .height = 96 });
+    }
+
+    fn responsiveAreaFraction(self: *const XdgManager, percent: Size, minimum: Size, margins: Size) Size {
+        const area = self.specialSurfaceArea();
+        if (area.width <= 0 or area.height <= 0) return minimum;
+
+        const available_width = @max(1, area.width - margins.width);
+        const available_height = @max(1, area.height - margins.height);
+        const min_width = @min(minimum.width, available_width);
+        const min_height = @min(minimum.height, available_height);
+        const target_width = @divTrunc(area.width * percent.width, 100);
+        const target_height = @divTrunc(area.height * percent.height, 100);
+
+        return .{
+            .width = std.math.clamp(target_width, min_width, available_width),
+            .height = std.math.clamp(target_height, min_height, available_height),
+        };
+    }
+
+    fn specialSurfaceArea(self: *const XdgManager) c.struct_wlr_box {
+        if (self.usable_area.width > 0 and self.usable_area.height > 0) return self.usable_area;
+        return self.outputArea();
     }
 
     fn isLauncherToplevel(self: *const XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) bool {
@@ -398,6 +486,22 @@ pub const XdgManager = struct {
             return true;
         }
         if (toplevel.*.title != null and std.mem.eql(u8, std.mem.span(toplevel.*.title), "Todos os aplicativos")) {
+            return true;
+        }
+        return false;
+    }
+
+    fn isSettingsToplevel(self: *const XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) bool {
+        _ = self;
+        if (toplevel.*.app_id != null and std.mem.eql(u8, std.mem.span(toplevel.*.app_id), "axia-settings")) {
+            return true;
+        }
+        return false;
+    }
+
+    fn isFilesToplevel(self: *const XdgManager, toplevel: [*c]c.struct_wlr_xdg_toplevel) bool {
+        _ = self;
+        if (toplevel.*.app_id != null and std.mem.eql(u8, std.mem.span(toplevel.*.app_id), "axia-files")) {
             return true;
         }
         return false;
@@ -480,6 +584,7 @@ pub const XdgManager = struct {
         self.hideSnapPreview();
 
         const hit = self.hitTest(lx, ly);
+        if (hit != null) self.hideAppPreview();
         self.updateChromeHover(hit);
 
         if (hit) |resolved| {
@@ -495,6 +600,10 @@ pub const XdgManager = struct {
         }
 
         c.wlr_seat_pointer_notify_clear_focus(self.seat);
+    }
+
+    pub fn hasActiveInteraction(self: *const XdgManager) bool {
+        return self.interactive.active();
     }
 
     pub fn hasHitAt(self: *XdgManager, lx: f64, ly: f64) bool {
@@ -531,6 +640,7 @@ pub const XdgManager = struct {
     pub fn handlePointerButton(self: *XdgManager, time_msec: u32, button: u32, state: c.enum_wl_pointer_button_state, lx: f64, ly: f64, modifiers: u32) void {
         self.cursor_lx = lx;
         self.cursor_ly = ly;
+        self.hideAppPreview();
 
         if (self.interactive.active()) {
             if (self.interactive.shouldForwardButtons()) {
@@ -1115,7 +1225,17 @@ pub const XdgManager = struct {
         return null;
     }
 
-    fn snapshotPreviewBuffers(self: *XdgManager, target: [*c]c.struct_wlr_scene_tree, view: *View, scale: f64, padding: i32) !void {
+    fn snapshotPreviewBuffers(
+        self: *XdgManager,
+        target: [*c]c.struct_wlr_scene_tree,
+        view: *View,
+        scale: f64,
+        padding: i32,
+        origin_x: i32,
+        origin_y: i32,
+        capture_width: i32,
+        capture_height: i32,
+    ) !void {
         _ = self;
         const source_tree = view.scene_tree orelse return;
         const node = &source_tree.*.node;
@@ -1127,8 +1247,10 @@ pub const XdgManager = struct {
 
         var context = PreviewCloneContext{
             .target = target,
-            .origin_x = view.x,
-            .origin_y = view.y,
+            .origin_x = origin_x,
+            .origin_y = origin_y,
+            .capture_width = capture_width,
+            .capture_height = capture_height,
             .scale = scale,
             .padding = padding,
         };
@@ -1139,6 +1261,8 @@ pub const XdgManager = struct {
         target: [*c]c.struct_wlr_scene_tree,
         origin_x: i32,
         origin_y: i32,
+        capture_width: i32,
+        capture_height: i32,
         scale: f64,
         padding: i32,
     };
@@ -1148,47 +1272,34 @@ pub const XdgManager = struct {
         const source = scene_buffer.*.buffer orelse return;
         const raw_context = raw_ctx orelse return;
         const context: *PreviewCloneContext = @ptrCast(@alignCast(raw_context));
+        const rel_x = sx - context.origin_x;
+        const rel_y = sy - context.origin_y;
+        const buffer_width = scene_buffer.*.buffer_width;
+        const buffer_height = scene_buffer.*.buffer_height;
+        const crop_left = @max(0, -rel_x);
+        const crop_top = @max(0, -rel_y);
+        const crop_right = @min(buffer_width, context.capture_width - rel_x);
+        const crop_bottom = @min(buffer_height, context.capture_height - rel_y);
+        if (crop_right <= crop_left or crop_bottom <= crop_top) return;
 
         const clone = c.wlr_scene_buffer_create(context.target, source) orelse return;
+        const source_box = c.struct_wlr_fbox{
+            .x = @floatFromInt(crop_left),
+            .y = @floatFromInt(crop_top),
+            .width = @floatFromInt(crop_right - crop_left),
+            .height = @floatFromInt(crop_bottom - crop_top),
+        };
+        c.wlr_scene_buffer_set_source_box(clone, &source_box);
         c.wlr_scene_node_set_position(
             &clone.*.node,
-            context.padding + @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(sx - context.origin_x)) * context.scale))),
-            context.padding + @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(sy - context.origin_y)) * context.scale))),
+            context.padding + @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(rel_x + crop_left)) * context.scale))),
+            context.padding + @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(rel_y + crop_top)) * context.scale))),
         );
         c.wlr_scene_buffer_set_dest_size(
             clone,
-            @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(scene_buffer.*.buffer_width)) * context.scale)))),
-            @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(scene_buffer.*.buffer_height)) * context.scale)))),
+            @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(crop_right - crop_left)) * context.scale)))),
+            @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(crop_bottom - crop_top)) * context.scale)))),
         );
         c.wlr_scene_buffer_set_filter_mode(clone, c.WLR_SCALE_FILTER_BILINEAR);
-    }
-
-    fn scaleSceneTree(tree: [*c]c.struct_wlr_scene_tree, scale: f64) void {
-        var link = tree.*.children.next;
-        while (link != &tree.*.children) : (link = link.*.next) {
-            const node: *c.struct_wlr_scene_node = @ptrCast(@alignCast(@as(*allowzero c.struct_wlr_scene_node, @fieldParentPtr("link", link))));
-            c.wlr_scene_node_set_position(
-                node,
-                @intFromFloat(@round(@as(f64, @floatFromInt(node.*.x)) * scale)),
-                @intFromFloat(@round(@as(f64, @floatFromInt(node.*.y)) * scale)),
-            );
-
-            switch (node.*.type) {
-                c.WLR_SCENE_NODE_TREE => {
-                    const child_tree: *c.struct_wlr_scene_tree = @ptrCast(@alignCast(@as(*allowzero c.struct_wlr_scene_tree, @fieldParentPtr("node", node))));
-                    scaleSceneTree(child_tree, scale);
-                },
-                c.WLR_SCENE_NODE_BUFFER => {
-                    const buffer: *c.struct_wlr_scene_buffer = @ptrCast(@alignCast(@as(*allowzero c.struct_wlr_scene_buffer, @fieldParentPtr("node", node))));
-                    c.wlr_scene_buffer_set_dest_size(
-                        buffer,
-                        @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(buffer.*.buffer_width)) * scale)))),
-                        @max(1, @as(i32, @intFromFloat(@round(@as(f64, @floatFromInt(buffer.*.buffer_height)) * scale)))),
-                    );
-                    c.wlr_scene_buffer_set_filter_mode(buffer, c.WLR_SCALE_FILTER_BILINEAR);
-                },
-                else => {},
-            }
-        }
     }
 };

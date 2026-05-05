@@ -36,6 +36,8 @@ pub const TitlebarStyle = struct {
     accent_color: [3]f64 = .{ 0.40, 0.95, 1.0 },
     title_x: f64 = 54.0,
     attached_to_edges: bool = false,
+    draw_attached_shadow: bool = true,
+    attached_shadow_clip_bottom: ?f64 = null,
 };
 
 pub fn rootRect(width: u32, height: u32) Rect {
@@ -106,12 +108,22 @@ pub fn closeRect(width: u32) Rect {
 }
 
 pub fn drawWindowShell(cr: *c.cairo_t, width: u32, height: u32, style: TitlebarStyle, hovered: HoveredControl) void {
+    c.cairo_save(cr);
+    defer c.cairo_restore(cr);
+
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+    c.cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    c.cairo_paint(cr);
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
+
     const root = rootRectStyled(width, height, style.attached_to_edges);
     if (style.attached_to_edges) {
         c.cairo_rectangle(cr, root.x, root.y, root.width, root.height);
         c.cairo_set_source_rgba(cr, 0.105, 0.105, 0.11, 0.99);
         c.cairo_fill(cr);
-        drawAttachedBottomShadow(cr, width, height, root);
+        if (style.draw_attached_shadow) {
+            drawAttachedBottomShadow(cr, width, height, root, style.attached_shadow_clip_bottom);
+        }
     } else {
         drawRoundedRect(cr, root, window_radius);
         c.cairo_set_source_rgba(cr, 0.105, 0.105, 0.11, 0.972);
@@ -155,13 +167,26 @@ pub fn drawWindowShell(cr: *c.cairo_t, width: u32, height: u32, style: TitlebarS
     drawWindowControl(cr, closeRect(width), .close, hovered == .close);
 }
 
-fn drawAttachedBottomShadow(cr: *c.cairo_t, width: u32, height: u32, root: Rect) void {
+pub fn drawAttachedShadowOnly(cr: *c.cairo_t, width: u32, height: u32) void {
+    c.cairo_save(cr);
+    defer c.cairo_restore(cr);
+
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_SOURCE);
+    c.cairo_set_source_rgba(cr, 0, 0, 0, 0);
+    c.cairo_paint(cr);
+    c.cairo_set_operator(cr, c.CAIRO_OPERATOR_OVER);
+
+    drawAttachedBottomShadow(cr, width, height, rootRectStyled(width, height, true), null);
+}
+
+fn drawAttachedBottomShadow(cr: *c.cairo_t, width: u32, height: u32, root: Rect, clip_bottom: ?f64) void {
     const surface_height = @as(f64, @floatFromInt(height));
     const shadow_top = root.y + root.height;
-    const shadow_height = surface_height - shadow_top;
+    const shadow_bottom = @max(shadow_top, @min(clip_bottom orelse surface_height, surface_height));
+    const shadow_height = shadow_bottom - shadow_top;
     if (shadow_height <= 0.5) return;
 
-    const gradient = c.cairo_pattern_create_linear(0, shadow_top, 0, surface_height);
+    const gradient = c.cairo_pattern_create_linear(0, shadow_top, 0, shadow_bottom);
     defer c.cairo_pattern_destroy(gradient);
     c.cairo_pattern_add_color_stop_rgba(gradient, 0.0, 0.0, 0.0, 0.0, 0.34);
     c.cairo_pattern_add_color_stop_rgba(gradient, 0.42, 0.0, 0.0, 0.0, 0.18);

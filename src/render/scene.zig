@@ -4,6 +4,7 @@ pub const SceneManager = struct {
     scene: [*c]c.struct_wlr_scene,
     output_layout_link: ?*c.struct_wlr_scene_output_layout,
     background_tree: [*c]c.struct_wlr_scene_tree,
+    window_shadow_tree: [*c]c.struct_wlr_scene_tree,
     dock_glass_tree: [*c]c.struct_wlr_scene_tree,
     bottom_layer_tree: [*c]c.struct_wlr_scene_tree,
     window_tree: [*c]c.struct_wlr_scene_tree,
@@ -21,6 +22,10 @@ pub const SceneManager = struct {
 
         const background_tree = c.wlr_scene_tree_create(&scene.*.tree) orelse {
             return error.SceneBackgroundTreeCreateFailed;
+        };
+
+        const window_shadow_tree = c.wlr_scene_tree_create(&scene.*.tree) orelse {
+            return error.SceneWindowShadowTreeCreateFailed;
         };
 
         const dock_glass_tree = c.wlr_scene_tree_create(&scene.*.tree) orelse {
@@ -51,6 +56,7 @@ pub const SceneManager = struct {
             .scene = scene,
             .output_layout_link = output_layout_link,
             .background_tree = background_tree,
+            .window_shadow_tree = window_shadow_tree,
             .dock_glass_tree = dock_glass_tree,
             .bottom_layer_tree = bottom_layer_tree,
             .window_tree = window_tree,
@@ -67,6 +73,10 @@ pub const SceneManager = struct {
 
     pub fn backgroundRoot(self: *SceneManager) [*c]c.struct_wlr_scene_tree {
         return self.background_tree;
+    }
+
+    pub fn windowShadowRoot(self: *SceneManager) [*c]c.struct_wlr_scene_tree {
+        return self.window_shadow_tree;
     }
 
     pub fn windowRoot(self: *SceneManager) [*c]c.struct_wlr_scene_tree {

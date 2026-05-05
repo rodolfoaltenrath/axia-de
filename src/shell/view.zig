@@ -43,6 +43,7 @@ pub const View = struct {
     output_layout: [*c]c.struct_wlr_output_layout,
     primary_output: [*c]c.struct_wlr_output,
     usable_area: c.struct_wlr_box,
+    shadow_parent: [*c]c.struct_wlr_scene_tree,
     parent: [*c]c.struct_wlr_scene_tree,
     xdg_surface: [*c]c.struct_wlr_xdg_surface,
     toplevel: [*c]c.struct_wlr_xdg_toplevel,
@@ -50,6 +51,8 @@ pub const View = struct {
     content_tree: ?[*c]c.struct_wlr_scene_tree = null,
     frame_buffer: ?*CairoBuffer = null,
     frame_scene_buffer: ?[*c]c.struct_wlr_scene_buffer = null,
+    attached_shadow_buffer: ?*CairoBuffer = null,
+    attached_shadow_scene_buffer: ?[*c]c.struct_wlr_scene_buffer = null,
     workspace_index: usize = 0,
     workspace_visible: bool = true,
     mapped: bool = false,
@@ -84,6 +87,7 @@ pub const View = struct {
         output_layout: [*c]c.struct_wlr_output_layout,
         primary_output: [*c]c.struct_wlr_output,
         usable_area: c.struct_wlr_box,
+        shadow_parent: [*c]c.struct_wlr_scene_tree,
         parent: [*c]c.struct_wlr_scene_tree,
         toplevel: [*c]c.struct_wlr_xdg_toplevel,
         xdg_surface: [*c]c.struct_wlr_xdg_surface,
@@ -103,6 +107,7 @@ pub const View = struct {
             .output_layout = output_layout,
             .primary_output = primary_output,
             .usable_area = usable_area,
+            .shadow_parent = shadow_parent,
             .parent = parent,
             .xdg_surface = xdg_surface,
             .toplevel = toplevel,
@@ -160,9 +165,17 @@ pub const View = struct {
             self.content_tree = null;
             self.frame_scene_buffer = null;
         }
+        if (self.attached_shadow_scene_buffer) |scene_buffer| {
+            c.wlr_scene_node_destroy(&scene_buffer.*.node);
+            self.attached_shadow_scene_buffer = null;
+        }
         if (self.frame_buffer) |buffer| {
             buffer.deinit();
             self.frame_buffer = null;
+        }
+        if (self.attached_shadow_buffer) |buffer| {
+            buffer.deinit();
+            self.attached_shadow_buffer = null;
         }
     }
 
@@ -209,6 +222,9 @@ pub const View = struct {
         if (self.scene_tree) |scene_tree| {
             c.wlr_scene_node_set_position(&scene_tree.*.node, self.x, self.y);
         }
+        if (self.attached_shadow_scene_buffer) |scene_buffer| {
+            c.wlr_scene_node_set_position(&scene_buffer.*.node, self.x, self.y);
+        }
     }
 
     pub fn setSize(self: *View, width: i32, height: i32) void {
@@ -223,6 +239,15 @@ pub const View = struct {
         _ = c.wlr_xdg_toplevel_set_bounds(self.toplevel, clamped_width, clamped_height);
         _ = c.wlr_xdg_toplevel_set_size(self.toplevel, clamped_width, clamped_height);
         self.updateSceneLayout() catch {};
+    }
+
+    pub fn setOuterSize(self: *View, width: i32, height: i32) void {
+        const mode = self.currentChromeModeForSizing();
+        const metrics = self.chromeMetrics(mode);
+        self.setSize(
+            @max(width - metrics.left - metrics.right, self.minWidth()),
+            @max(height - metrics.top - metrics.bottom, self.minHeight()),
+        );
     }
 
     pub fn effectiveWidth(self: *const View) i32 {
@@ -251,6 +276,16 @@ pub const View = struct {
             return self.toplevel.*.current.min_height;
         }
         return 90;
+    }
+
+    pub fn minOuterWidth(self: *const View) i32 {
+        const metrics = self.chromeMetrics(self.currentChromeModeForSizing());
+        return self.minWidth() + metrics.left + metrics.right;
+    }
+
+    pub fn minOuterHeight(self: *const View) i32 {
+        const metrics = self.chromeMetrics(self.currentChromeModeForSizing());
+        return self.minHeight() + metrics.top + metrics.bottom;
     }
 
     pub fn canStartInteractive(self: *const View) bool {
@@ -296,7 +331,7 @@ pub const View = struct {
 
     pub fn usesCompositorChrome(self: *const View) bool {
         const app_id = self.appId();
-        return app_id.len > 0 and !std.mem.startsWith(u8, app_id, "axia-");
+        return app_id.len == 0 or !std.mem.startsWith(u8, app_id, "axia-");
     }
 
     pub fn compositorChromeVisible(self: *const View) bool {
@@ -682,6 +717,7 @@ pub const View = struct {
             c.wlr_scene_node_set_position(&scene_tree.*.node, self.x, self.y);
             scene_tree.*.node.data = self;
             self.scene_tree = scene_tree;
+            try self.updateAttachedShadow();
         }
 
         self.syncVisibility();
@@ -779,6 +815,9 @@ pub const View = struct {
         if (self.scene_tree) |scene_tree| {
             c.wlr_scene_node_set_enabled(&scene_tree.*.node, self.mapped and self.workspace_visible and !self.minimized);
         }
+        if (self.attached_shadow_scene_buffer) |scene_buffer| {
+            c.wlr_scene_node_set_enabled(&scene_buffer.*.node, self.attachedShadowVisible());
+        }
     }
 
     fn clientBoxForOuter(self: *const View, outer: c.struct_wlr_box) c.struct_wlr_box {
@@ -798,6 +837,7 @@ pub const View = struct {
 
     fn updateSceneLayout(self: *View) !void {
         if (self.scene_tree == null) return;
+        try self.updateAttachedShadow();
         if (!self.usesCompositorChrome()) return;
 
         const metrics = self.chromeMetrics(self.currentChromeMode());
@@ -853,10 +893,12 @@ pub const View = struct {
         if (!self.compositorChromeVisible()) return;
 
         const buffer = self.frame_buffer orelse return;
+        const mode = self.currentChromeMode();
         chrome.drawWindowShell(buffer.cr, buffer.width, buffer.height, .{
             .title = self.title(),
             .title_x = 22.0,
-            .attached_to_edges = self.currentChromeMode() == .attached,
+            .attached_to_edges = mode == .attached,
+            .draw_attached_shadow = mode != .attached,
         }, self.chrome_hovered);
         c.cairo_surface_flush(buffer.surface);
         if (self.frame_scene_buffer) |scene_buffer| {
@@ -866,6 +908,12 @@ pub const View = struct {
 
     fn currentChromeMode(self: *const View) ChromeMode {
         if (!self.compositorChromeVisible()) return .none;
+        if (self.layout_mode == .maximized or self.toplevel.*.current.maximized or self.toplevel.*.requested.maximized) return .attached;
+        return .floating;
+    }
+
+    fn currentChromeModeForSizing(self: *const View) ChromeMode {
+        if (!self.usesCompositorChrome()) return .none;
         if (self.layout_mode == .maximized or self.toplevel.*.current.maximized or self.toplevel.*.requested.maximized) return .attached;
         return .floating;
     }
@@ -923,5 +971,63 @@ pub const View = struct {
         const bottom = @min(output_bottom, desired_bottom);
         outer.height = @max(1, bottom - outer.y);
         return outer;
+    }
+
+    fn attachedShadowVisible(self: *const View) bool {
+        return self.mapped and
+            self.workspace_visible and
+            !self.minimized and
+            !self.toplevel.*.current.fullscreen and
+            !self.toplevel.*.requested.fullscreen and
+            self.isAttachedLayout();
+    }
+
+    fn isAttachedLayout(self: *const View) bool {
+        return self.layout_mode == .maximized or
+            self.toplevel.*.current.maximized or
+            self.toplevel.*.requested.maximized;
+    }
+
+    fn updateAttachedShadow(self: *View) !void {
+        if (!self.attachedShadowVisible()) {
+            if (self.attached_shadow_scene_buffer) |scene_buffer| {
+                c.wlr_scene_node_set_enabled(&scene_buffer.*.node, false);
+            }
+            return;
+        }
+
+        const shadow_width: u32 = @intCast(@max(self.outerWidth(), 1));
+        const shadow_height: u32 = @intCast(@max(self.outerHeight(), 1));
+        if (self.attached_shadow_buffer == null or
+            self.attached_shadow_buffer.?.width != shadow_width or
+            self.attached_shadow_buffer.?.height != shadow_height)
+        {
+            const next_buffer = try CairoBuffer.init(self.allocator, shadow_width, shadow_height);
+            errdefer next_buffer.deinit();
+            chrome.drawAttachedShadowOnly(next_buffer.cr, next_buffer.width, next_buffer.height);
+            c.cairo_surface_flush(next_buffer.surface);
+
+            if (self.attached_shadow_scene_buffer == null) {
+                self.attached_shadow_scene_buffer = c.wlr_scene_buffer_create(self.shadow_parent, next_buffer.wlrBuffer()) orelse return error.SceneXdgSurfaceCreateFailed;
+            } else {
+                c.wlr_scene_buffer_set_buffer(self.attached_shadow_scene_buffer.?, next_buffer.wlrBuffer());
+            }
+
+            if (self.attached_shadow_buffer) |old_buffer| old_buffer.deinit();
+            self.attached_shadow_buffer = next_buffer;
+        } else if (self.attached_shadow_buffer) |buffer| {
+            chrome.drawAttachedShadowOnly(buffer.cr, buffer.width, buffer.height);
+            c.cairo_surface_flush(buffer.surface);
+            if (self.attached_shadow_scene_buffer) |scene_buffer| {
+                c.wlr_scene_buffer_set_buffer(scene_buffer, buffer.wlrBuffer());
+            }
+        }
+
+        if (self.attached_shadow_scene_buffer) |scene_buffer| {
+            c.wlr_scene_node_set_position(&scene_buffer.*.node, self.x, self.y);
+            c.wlr_scene_buffer_set_dest_size(scene_buffer, @intCast(shadow_width), @intCast(shadow_height));
+            c.wlr_scene_buffer_set_filter_mode(scene_buffer, c.WLR_SCALE_FILTER_BILINEAR);
+            c.wlr_scene_node_set_enabled(&scene_buffer.*.node, true);
+        }
     }
 };

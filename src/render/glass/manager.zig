@@ -173,6 +173,9 @@ pub const Manager = struct {
             entry.style,
         );
         errdefer next_buffer.deinit();
+        if (entry.kind == .dock or entry.kind == .top_bar) {
+            pipeline.paintOverlay(next_buffer, entry.style);
+        }
 
         if (entry.tree == null) {
             entry.tree = c.wlr_scene_tree_create(self.rootFor(entry.kind)) orelse return error.GlassRegionTreeCreateFailed;

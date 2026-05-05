@@ -122,6 +122,10 @@ pub fn draw(cr: *c.cairo_t, width: u32, height: u32, state: State) void {
         .accent_glyph = "",
         .title_x = 56,
         .attached_to_edges = state.maximized,
+        .attached_shadow_clip_bottom = if (state.maximized)
+            @as(f64, @floatFromInt(height)) - chrome.attached_bottom_shadow
+        else
+            null,
     }, hoveredControl(state.hovered));
     drawTopSettingsIcon(cr);
     drawSidebar(cr, width, height, state.page, state.hovered);

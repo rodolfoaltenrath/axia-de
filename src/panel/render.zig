@@ -235,21 +235,18 @@ fn drawArrowButton(cr: *c.cairo_t, rect: Rect, label: []const u8) void {
 }
 
 fn drawGlassBar(cr: *c.cairo_t, rect: Rect, preferences: settings_model.PreferencesState) void {
-    const accent = settings_model.accentSpec(preferences.accent).primary;
-    c.cairo_rectangle(cr, rect.x, rect.y, rect.width, rect.height);
-    c.cairo_set_source_rgba(cr, 0.092, 0.098, 0.122, if (preferences.reduce_transparency) 0.94 else 0.24);
-    c.cairo_fill(cr);
+    if (preferences.reduce_transparency) {
+        c.cairo_rectangle(cr, rect.x, rect.y, rect.width, rect.height);
+        c.cairo_set_source_rgba(cr, 0.22, 0.34, 0.58, 0.94);
+        c.cairo_fill(cr);
+    }
 
     c.cairo_rectangle(cr, rect.x, rect.y, rect.width, 1);
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.20);
+    c.cairo_set_source_rgba(cr, 0.86, 0.96, 1.0, 0.16);
     c.cairo_fill(cr);
 
     c.cairo_rectangle(cr, rect.x, rect.y + rect.height - 1, rect.width, 1);
-    c.cairo_set_source_rgba(cr, accent[0], accent[1], accent[2], 0.30);
-    c.cairo_fill(cr);
-
-    c.cairo_rectangle(cr, rect.x, rect.y, rect.width, rect.height);
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.030);
+    c.cairo_set_source_rgba(cr, 0.09, 0.16, 0.34, 0.20);
     c.cairo_fill(cr);
 }
 
@@ -367,12 +364,12 @@ fn drawNotificationGlyph(cr: *c.cairo_t, rect: Rect, alpha: f64) void {
 }
 
 fn drawHoverCapsule(cr: *c.cairo_t, rect: Rect, preferences: settings_model.PreferencesState) void {
-    const accent = settings_model.accentSpec(preferences.accent).primary;
+    _ = preferences;
     drawRoundedRect(cr, rect, 9);
-    c.cairo_set_source_rgba(cr, accent[0], accent[1], accent[2], 0.13);
+    c.cairo_set_source_rgba(cr, 0.86, 0.95, 1.0, 0.13);
     c.cairo_fill_preserve(cr);
 
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.05);
+    c.cairo_set_source_rgba(cr, 0.92, 0.98, 1.0, 0.08);
     c.cairo_set_line_width(cr, 1);
     c.cairo_stroke(cr);
 
@@ -386,7 +383,7 @@ fn drawHoverCapsule(cr: *c.cairo_t, rect: Rect, preferences: settings_model.Pref
         },
         8,
     );
-    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.032);
+    c.cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.040);
     c.cairo_fill(cr);
 }
 

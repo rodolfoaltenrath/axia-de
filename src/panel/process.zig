@@ -56,6 +56,22 @@ pub const PanelProcess = struct {
             log.err("failed to set WAYLAND_DISPLAY for panel: {}", .{err});
             return;
         };
+        env_map.put("XDG_SESSION_TYPE", "wayland") catch |err| {
+            log.err("failed to set XDG_SESSION_TYPE for panel: {}", .{err});
+            return;
+        };
+        env_map.put("XDG_CURRENT_DESKTOP", "Axia") catch |err| {
+            log.err("failed to set XDG_CURRENT_DESKTOP for panel: {}", .{err});
+            return;
+        };
+        env_map.put("XDG_SESSION_DESKTOP", "axia") catch |err| {
+            log.err("failed to set XDG_SESSION_DESKTOP for panel: {}", .{err});
+            return;
+        };
+        env_map.put("DESKTOP_SESSION", "axia") catch |err| {
+            log.err("failed to set DESKTOP_SESSION for panel: {}", .{err});
+            return;
+        };
         env_map.put("AXIA_BIN_DIR", exe_dir) catch |err| {
             log.err("failed to set AXIA_BIN_DIR for panel: {}", .{err});
             return;

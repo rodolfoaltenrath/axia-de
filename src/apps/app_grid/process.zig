@@ -60,9 +60,26 @@ pub const AppGridProcess = struct {
                 return;
             };
         }
+        scrubForeignDesktopEnv(&env_map);
 
         env_map.put("WAYLAND_DISPLAY", std.mem.span(socket_name)) catch |err| {
             log.err("failed to set WAYLAND_DISPLAY for app grid: {}", .{err});
+            return;
+        };
+        env_map.put("XDG_SESSION_TYPE", "wayland") catch |err| {
+            log.err("failed to set XDG_SESSION_TYPE for app grid: {}", .{err});
+            return;
+        };
+        env_map.put("XDG_CURRENT_DESKTOP", "Axia") catch |err| {
+            log.err("failed to set XDG_CURRENT_DESKTOP for app grid: {}", .{err});
+            return;
+        };
+        env_map.put("XDG_SESSION_DESKTOP", "axia") catch |err| {
+            log.err("failed to set XDG_SESSION_DESKTOP for app grid: {}", .{err});
+            return;
+        };
+        env_map.put("DESKTOP_SESSION", "axia") catch |err| {
+            log.err("failed to set DESKTOP_SESSION for app grid: {}", .{err});
             return;
         };
         env_map.put("AXIA_BIN_DIR", exe_dir) catch |err| {
@@ -120,4 +137,13 @@ fn termFromStatus(status: u32) std.process.Child.Term {
         .{ .Stopped = std.posix.W.STOPSIG(status) }
     else
         .{ .Unknown = status };
+}
+
+fn scrubForeignDesktopEnv(env_map: *std.process.EnvMap) void {
+    env_map.remove("KDE_FULL_SESSION");
+    env_map.remove("KDE_SESSION_VERSION");
+    env_map.remove("KDE_SESSION_UID");
+    env_map.remove("KDE_APPLICATIONS_AS_SCOPE");
+    env_map.remove("QT_QPA_PLATFORMTHEME");
+    env_map.remove("GTK_USE_PORTAL");
 }

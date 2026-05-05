@@ -144,6 +144,7 @@ pub const Server = struct {
             allocator,
             input.seat,
             output_layout,
+            scene.windowShadowRoot(),
             scene.windowRoot(),
             scene.overlayLayerRoot(),
             display,
@@ -413,6 +414,10 @@ pub const Server = struct {
     fn handlePointerMotion(ctx: ?*anyopaque, time_msec: u32, lx: f64, ly: f64) void {
         const raw_server = ctx orelse return;
         const server: *Server = @ptrCast(@alignCast(raw_server));
+        if (server.xdg.hasActiveInteraction()) {
+            server.xdg.handlePointerMotion(time_msec, lx, ly);
+            return;
+        }
         if (server.layers.handlePointerMotionAboveWindows(time_msec, lx, ly)) return;
         if (server.settings.handlePointerMotion(lx, ly)) return;
         if (server.desktop_menu.handlePointerMotion(lx, ly)) return;
@@ -436,6 +441,10 @@ pub const Server = struct {
         const server: *Server = @ptrCast(@alignCast(raw_server));
         if (state == c.WL_POINTER_BUTTON_STATE_PRESSED) {
             server.xdg.dismissLauncherIfOutside(lx, ly);
+        }
+        if (server.xdg.hasActiveInteraction()) {
+            server.xdg.handlePointerButton(time_msec, button, state, lx, ly, server.input.currentModifiers());
+            return;
         }
         if (server.layers.handlePointerButtonAboveWindows(time_msec, button, state, lx, ly)) return;
         if (server.settings.handlePointerButton(button, state, lx, ly)) return;
@@ -944,6 +953,22 @@ pub const Server = struct {
             log.err("failed to set WAYLAND_DISPLAY for settings app: {}", .{err});
             return;
         };
+        env_map.put("XDG_SESSION_TYPE", "wayland") catch |err| {
+            log.err("failed to set XDG_SESSION_TYPE for settings app: {}", .{err});
+            return;
+        };
+        env_map.put("XDG_CURRENT_DESKTOP", "Axia") catch |err| {
+            log.err("failed to set XDG_CURRENT_DESKTOP for settings app: {}", .{err});
+            return;
+        };
+        env_map.put("XDG_SESSION_DESKTOP", "axia") catch |err| {
+            log.err("failed to set XDG_SESSION_DESKTOP for settings app: {}", .{err});
+            return;
+        };
+        env_map.put("DESKTOP_SESSION", "axia") catch |err| {
+            log.err("failed to set DESKTOP_SESSION for settings app: {}", .{err});
+            return;
+        };
         env_map.put("AXIA_BIN_DIR", exe_dir) catch |err| {
             log.err("failed to set AXIA_BIN_DIR for settings app: {}", .{err});
             return;
@@ -1007,7 +1032,7 @@ pub const Server = struct {
             .area => blk: {
                 const selection_result = std.process.Child.run(.{
                     .allocator = allocator,
-                    .argv = &.{ "slurp" },
+                    .argv = &.{"slurp"},
                     .env_map = &env_map,
                     .max_output_bytes = 4 * 1024,
                 }) catch |err| {

@@ -3,6 +3,8 @@ const runtime_catalog = @import("runtime_catalog");
 
 const log = std.log.scoped(.axia_launcher_state);
 const max_recent_entries: usize = 8;
+const default_browser_id = "default-browser";
+const legacy_browser_ids = [_][]const u8{ "firefox" };
 
 pub const State = struct {
     allocator: std.mem.Allocator,
@@ -49,7 +51,11 @@ pub const State = struct {
     }
 
     pub fn ensureDefaultFavorites(self: *State, catalog: *const runtime_catalog.Catalog) !void {
-        if (self.favorite_ids.items.len > 0) return;
+        const replaced = try self.replaceLegacyBrowserFavorite();
+        if (self.favorite_ids.items.len > 0) {
+            if (replaced) try self.save();
+            return;
+        }
 
         for (catalog.entries.items) |entry| {
             if (!entry.favorite or entry.id.len == 0) continue;
@@ -59,13 +65,37 @@ pub const State = struct {
     }
 
     pub fn ensureDefaultLauncherPins(self: *State, catalog: *const runtime_catalog.Catalog) !void {
-        if (self.launcher_pin_ids.items.len > 0) return;
+        const replaced = try self.replaceLegacyBrowserLauncherPin();
+        if (self.launcher_pin_ids.items.len > 0) {
+            if (replaced) try self.save();
+            return;
+        }
 
         for (catalog.entries.items) |entry| {
             if (!entry.favorite or entry.id.len == 0) continue;
             try self.launcher_pin_ids.append(self.allocator, try self.allocator.dupe(u8, entry.id));
         }
         try self.save();
+    }
+
+    fn replaceLegacyBrowserFavorite(self: *State) !bool {
+        return try self.replaceLegacyBrowserId(&self.favorite_ids);
+    }
+
+    fn replaceLegacyBrowserLauncherPin(self: *State) !bool {
+        return try self.replaceLegacyBrowserId(&self.launcher_pin_ids);
+    }
+
+    fn replaceLegacyBrowserId(self: *State, ids: *std.ArrayListUnmanaged([]u8)) !bool {
+        if (containsId(ids.items, default_browser_id)) return false;
+
+        for (ids.items, 0..) |id, index| {
+            if (!isLegacyBrowserId(id)) continue;
+            self.allocator.free(ids.items[index]);
+            ids.items[index] = try self.allocator.dupe(u8, default_browser_id);
+            return true;
+        }
+        return false;
     }
 
     pub fn isFavorite(self: *const State, id: []const u8) bool {
@@ -300,6 +330,13 @@ pub fn load(allocator: std.mem.Allocator) !State {
 fn containsId(items: []const []u8, id: []const u8) bool {
     for (items) |item| {
         if (std.mem.eql(u8, item, id)) return true;
+    }
+    return false;
+}
+
+fn isLegacyBrowserId(id: []const u8) bool {
+    for (legacy_browser_ids) |legacy_id| {
+        if (std.mem.eql(u8, id, legacy_id)) return true;
     }
     return false;
 }

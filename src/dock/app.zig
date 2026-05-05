@@ -14,7 +14,7 @@ const default_output_width: u32 = 1366;
 const runtime_sync_interval_ms: i64 = 160;
 const preferences_sync_interval_ms: i64 = 320;
 const auto_hide_grace_ms: i64 = 260;
-const preview_hover_delay_ms: i64 = 220;
+const preview_hover_delay_ms: i64 = 0;
 const preview_suppression_after_click_ms: i64 = 520;
 const drag_start_threshold: f64 = 8.0;
 const context_menu_extra_height: u32 = 80;
@@ -357,6 +357,7 @@ pub const App = struct {
             if (self.previewed_index != null and self.previewed_index != new_hovered) {
                 self.hidePreview();
             }
+            self.syncPreviewHover();
             self.surface.dirty = true;
         }
 

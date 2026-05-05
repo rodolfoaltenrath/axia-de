@@ -191,6 +191,7 @@ pub const LayerManager = struct {
         self.relayoutLayer(c.ZWLR_LAYER_SHELL_V1_LAYER_BOTTOM, full_area, &usable_area);
         self.relayoutLayer(c.ZWLR_LAYER_SHELL_V1_LAYER_TOP, full_area, &usable_area);
         self.relayoutLayer(c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, full_area, &usable_area);
+        self.applyExclusiveFallback(full_area, &usable_area);
         self.usable_area = usable_area;
         if (self.layout_cb) |callback| {
             callback(self.layout_ctx, usable_area);
@@ -203,6 +204,48 @@ pub const LayerManager = struct {
             if (surface.layer() != layer) continue;
             if (surface.layer_surface.*.output != output) continue;
             surface.reconfigure(full_area, usable_area);
+        }
+    }
+
+    fn applyExclusiveFallback(self: *LayerManager, full_area: c.struct_wlr_box, usable_area: *c.struct_wlr_box) void {
+        const output = self.primary_output orelse return;
+        var top_reserved: i32 = 0;
+        var bottom_reserved: i32 = 0;
+
+        for (self.surfaces.items) |surface| {
+            if (surface.layer_surface.*.output != output) continue;
+
+            const state = if (surface.layer_surface.*.initialized)
+                surface.layer_surface.*.current
+            else
+                surface.layer_surface.*.pending;
+            if (state.exclusive_zone <= 0) continue;
+
+            const anchored_top = (state.anchor & c.ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP) != 0;
+            const anchored_bottom = (state.anchor & c.ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM) != 0;
+
+            if (anchored_top and !anchored_bottom) {
+                top_reserved = @max(top_reserved, state.exclusive_zone);
+            } else if (anchored_bottom and !anchored_top) {
+                bottom_reserved = @max(bottom_reserved, state.exclusive_zone);
+            }
+        }
+
+        if (top_reserved > 0) {
+            const desired_top = full_area.y + top_reserved;
+            if (usable_area.y < desired_top) {
+                const current_bottom = usable_area.y + usable_area.height;
+                usable_area.y = desired_top;
+                usable_area.height = @max(1, current_bottom - desired_top);
+            }
+        }
+
+        if (bottom_reserved > 0) {
+            const desired_bottom = full_area.y + full_area.height - bottom_reserved;
+            const current_bottom = usable_area.y + usable_area.height;
+            if (current_bottom > desired_bottom) {
+                usable_area.height = @max(1, desired_bottom - usable_area.y);
+            }
         }
     }
 
@@ -265,8 +308,13 @@ pub const LayerManager = struct {
         manager.unregisterSurface(surface);
     }
 
-    fn handleSurfaceCommit(ctx: ?*anyopaque, _: *LayerSurface) void {
-        _ = ctx;
+    fn handleSurfaceCommit(ctx: ?*anyopaque, surface: *LayerSurface) void {
+        const raw_manager = ctx orelse return;
+        const manager: *LayerManager = @ptrCast(@alignCast(raw_manager));
+        if (surface.initial_relayout_done) return;
+
+        surface.initial_relayout_done = true;
+        manager.relayout();
     }
 
     fn handleRelayoutIdle(data: ?*anyopaque) callconv(.c) void {

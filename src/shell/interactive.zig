@@ -70,8 +70,13 @@ pub const InteractiveState = struct {
         self.grab_ly = ly;
         self.grab_x = view.x;
         self.grab_y = view.y;
-        self.grab_width = view.effectiveWidth();
-        self.grab_height = view.effectiveHeight();
+        if (forward_button_events) {
+            self.grab_width = view.effectiveWidth();
+            self.grab_height = view.effectiveHeight();
+        } else {
+            self.grab_width = view.outerWidth();
+            self.grab_height = view.outerHeight();
+        }
         self.resize_edges = edges;
         _ = c.wlr_xdg_toplevel_set_resizing(view.toplevel, true);
     }
@@ -95,8 +100,8 @@ pub const InteractiveState = struct {
 
                 const cursor_x = @as(i32, @intFromFloat(lx));
                 const cursor_y = @as(i32, @intFromFloat(ly));
-                const min_width = view.minWidth();
-                const min_height = view.minHeight();
+                const min_width = if (self.forward_button_events) view.minWidth() else view.minOuterWidth();
+                const min_height = if (self.forward_button_events) view.minHeight() else view.minOuterHeight();
 
                 if ((self.resize_edges & c.WLR_EDGE_LEFT) != 0) {
                     left = @min(cursor_x, right - min_width);
@@ -112,7 +117,11 @@ pub const InteractiveState = struct {
                 }
 
                 view.setPosition(left, top);
-                view.setSize(right - left, bottom - top);
+                if (self.forward_button_events) {
+                    view.setSize(right - left, bottom - top);
+                } else {
+                    view.setOuterSize(right - left, bottom - top);
+                }
                 return true;
             },
         }

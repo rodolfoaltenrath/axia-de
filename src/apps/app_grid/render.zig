@@ -15,11 +15,13 @@ const tile_gap_y: f64 = 18.0;
 pub fn cardRect(width: u32, height: u32) Rect {
     const total_width = @as(f64, @floatFromInt(width));
     const total_height = @as(f64, @floatFromInt(height));
-    const card_width = @min(total_width - 72.0, 1180.0);
-    const card_height = @min(total_height - 60.0, 760.0);
+    const horizontal_margin: f64 = if (total_width < 560.0) 24.0 else 72.0;
+    const vertical_margin: f64 = if (total_height < 520.0) 36.0 else 60.0;
+    const card_width = @max(1.0, total_width - horizontal_margin);
+    const card_height = @max(1.0, total_height - vertical_margin);
     return .{
         .x = (total_width - card_width) / 2.0,
-        .y = 22.0,
+        .y = (total_height - card_height) / 2.0,
         .width = card_width,
         .height = card_height,
     };
@@ -27,7 +29,7 @@ pub fn cardRect(width: u32, height: u32) Rect {
 
 pub fn searchRect(width: u32, height: u32) Rect {
     const card = cardRect(width, height);
-    const search_width = @min(card.width - 160.0, 420.0);
+    const search_width = @max(1.0, @min(card.width - 48.0, 420.0));
     return .{
         .x = card.x + (card.width - search_width) / 2.0,
         .y = card.y + 30.0,
@@ -38,11 +40,14 @@ pub fn searchRect(width: u32, height: u32) Rect {
 
 pub fn gridRect(width: u32, height: u32) Rect {
     const card = cardRect(width, height);
+    const horizontal_padding: f64 = if (card.width < 520.0) 22.0 else 44.0;
+    const top_offset: f64 = if (card.height < 420.0) 96.0 else 110.0;
+    const bottom_padding: f64 = if (card.height < 420.0) 26.0 else 38.0;
     return .{
-        .x = card.x + 44.0,
-        .y = card.y + 110.0,
-        .width = card.width - 88.0,
-        .height = card.height - 148.0,
+        .x = card.x + horizontal_padding,
+        .y = card.y + top_offset,
+        .width = @max(1.0, card.width - horizontal_padding * 2.0),
+        .height = @max(1.0, card.height - top_offset - bottom_padding),
     };
 }
 
@@ -126,11 +131,12 @@ pub fn draw(
     drawLabel(cr, search.x + 50.0, search.y + 30.0, 15.0, query, query_color[0], query_color[1], query_color[2]);
 
     if (snapshot.count == 0) {
+        const empty_padding = @min(120.0, card.width / 5.0);
         const empty_rect = Rect{
-            .x = card.x + 120.0,
+            .x = card.x + empty_padding,
             .y = card.y + 180.0,
-            .width = card.width - 240.0,
-            .height = 220.0,
+            .width = @max(1.0, card.width - empty_padding * 2.0),
+            .height = @max(1.0, card.height - 210.0),
         };
         drawEmptyState(cr, empty_rect, snapshot.query.len > 0, loading);
         return;
@@ -156,11 +162,13 @@ fn tileRect(width: u32, height: u32, visible_index: usize) Rect {
     const cols = gridColumns(width, height);
     const col = visible_index % cols;
     const row = visible_index / cols;
+    const width_for_tile = @min(tile_width, grid.width);
+    const height_for_tile = @min(tile_height, grid.height);
     return .{
         .x = grid.x + @as(f64, @floatFromInt(col)) * (tile_width + tile_gap_x),
         .y = grid.y + @as(f64, @floatFromInt(row)) * (tile_height + tile_gap_y),
-        .width = tile_width,
-        .height = tile_height,
+        .width = width_for_tile,
+        .height = height_for_tile,
     };
 }
 
